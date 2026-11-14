@@ -1,0 +1,11 @@
+--- a/entrypoint.sh
++++ b/entrypoint.sh
+@@ -199,7 +199,7 @@
+ 			CONFIG_AUTOREMOVE=y \
+ 			V="$V" \
+ 			-j "$(nproc)" \
+-			"package/$PKG/compile" || {
++			"package/$PKG/compile" CONFIG_PACKAGE_vmlinux-btf= || {
+ 				RET=$?
+ 				break
+ 			}
