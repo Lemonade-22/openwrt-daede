@@ -1,23 +1,33 @@
 diff --git a/luci-app-daede/Makefile b/luci-app-daede/Makefile
-index 6514a54..faca459 100644
 --- a/luci-app-daede/Makefile
 +++ b/luci-app-daede/Makefile
-@@ -25,6 +25,9 @@ define Package/$(PKG_NAME)/config
- 	config PACKAGE_$(PKG_NAME)_dae
- 		bool "dae backend"
+@@ -12,33 +12,17 @@
  
-+	config PACKAGE_$(PKG_NAME)_honk
-+		bool "honk backend (requires the daeuniverse OpenWrt feed)"
-+
- 	endchoice
- endef
+ include $(INCLUDE_DIR)/package.mk
  
-@@ -33,12 +36,12 @@ define Package/$(PKG_NAME)
+-define Package/$(PKG_NAME)/config
+-	choice
+-		prompt "Backend dependency"
+-		default PACKAGE_$(PKG_NAME)_daed
+-		help
+-			Select which backend package luci-app-daede should pull in by default.
+-
+-	config PACKAGE_$(PKG_NAME)_daed
+-		bool "daed backend"
+-
+-	config PACKAGE_$(PKG_NAME)_dae
+-		bool "dae backend"
+-
+-	endchoice
+-endef
+-
+ define Package/$(PKG_NAME)
+ 	SECTION:=luci
  	CATEGORY:=LuCI
  	SUBMENU:=3. Applications
  	TITLE:=LuCI app for daede dashboard
 -	DEPENDS:=+luci-base +PACKAGE_$(PKG_NAME)_dae:dae +PACKAGE_$(PKG_NAME)_daed:daed
-+	DEPENDS:=+luci-base +PACKAGE_$(PKG_NAME)_dae:dae +PACKAGE_$(PKG_NAME)_daed:daed +PACKAGE_$(PKG_NAME)_honk:honk +curl +ucode
++	DEPENDS:=+luci-base +curl +ucode
  	PKGARCH:=all
  endef
  
@@ -27,7 +37,7 @@ index 6514a54..faca459 100644
  endef
  
  define Build/Prepare
-@@ -73,6 +76,7 @@ define Package/$(PKG_NAME)/install
+@@ -73,6 +57,7 @@
  	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/pkg-info.sh $(1)/usr/share/luci-app-daede/pkg-info.sh
  	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/update-geo.sh $(1)/usr/share/luci-app-daede/update-geo.sh
  	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/update-pkg.sh $(1)/usr/share/luci-app-daede/update-pkg.sh
@@ -35,7 +45,7 @@ index 6514a54..faca459 100644
  	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/gen-dae-config.sh $(1)/usr/share/luci-app-daede/gen-dae-config.sh
  	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/proxy-check.sh $(1)/usr/share/luci-app-daede/proxy-check.sh
  	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/fetch-clash-yaml.sh $(1)/usr/share/luci-app-daede/fetch-clash-yaml.sh
-@@ -83,6 +87,9 @@ define Package/$(PKG_NAME)/install
+@@ -83,6 +68,9 @@
  	$(INSTALL_DATA) $(CURDIR)/../dae/files/dae.config $(1)/usr/share/luci-app-daede/defaults/dae
  	$(INSTALL_DATA) $(CURDIR)/../daed/files/daed.config $(1)/usr/share/luci-app-daede/defaults/daed
  	$(INSTALL_DATA) ./root/etc/config/daede $(1)/usr/share/luci-app-daede/defaults/daede

@@ -30,6 +30,10 @@ SDK、源码固定的 Rust stable/nightly 和 bpf-linker。两个构建并行，
 
 ## 使用与范围
 
+面板不再依赖或自动安装 daed，也不强制捆绑其他内核。使用 honk 时只需
+安装 honk 和 luci-app-daede；dae、daed 仍作为独立可选 APK 构建，
+面板保留对已安装后端的切换与管理。
+
 安装包只面向 `aarch64_cortex-a53`、OpenWrt/ImmortalWrt 25.12 及之后
 的相应环境；LuCI 本身是 noarch。较新主版本仍以对应 SDK、依赖和实际
 固件兼容性为准，填写版本号不会让旧包自动兼容所有未来版本。
