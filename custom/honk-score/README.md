@@ -19,7 +19,7 @@
 - `dae-*.apk`：沿用仓库冻结的 dae 源码与性能定制。
 - `daed-*.apk`：沿用仓库冻结的 daed/dae-wing 源码。
 - `honk-*.apk`：使用上游 OpenWrt 包配方，从锁定的 honk 源码编译。
-- `luci-app-daede-*.apk`：应用 Score 补丁后的面板，版本 release 增加 `.honk1`。
+- `luci-app-daede-*.apk`：应用 Score 补丁后的面板，版本号加 `_p1`（例如 `1.15_p1-r13`）。apk 的 `-r` 段只接受纯数字，后缀只认 `_alpha/_beta/_pre/_rc/_cvs/_svn/_git/_hg/_p`，写 `13.honk1` 或 `13_h` 都会被判为非法版本。
 - `SHA256SUMS`、构建输入记录和 honk 包元数据。
 
 dae/daed/LuCI 复用 kenzok8 的 SDK action、ImmortalWrt 对应大版本 SDK

@@ -128,6 +128,17 @@ jobs:
           PRIVATE_KEY: ''
           GOLANG_REPO: https://github.com/kenzok8/golang
           GOLANG_BRANCH: '1.27'
+      - name: Refuse a build that logged package errors
+        # The SDK action can exit 0 even when a package failed to build; the
+        # real reason lands in logs/package/error.txt. Fail here, on the real
+        # message, instead of letting the collector report a missing APK.
+        run: |
+          set -euo pipefail
+          if [ -s logs/package/error.txt ]; then
+            echo '::error::the SDK build reported a package failure; see the lines below'
+            cat logs/package/error.txt
+            exit 1
+          fi
       - name: Require and collect the three requested APKs
         env:
           SDK_SERIES: ${{ needs.prepare.outputs.series }}
@@ -136,7 +147,12 @@ jobs:
           mkdir -p dist/daede
           for package in dae daed luci-app-daede; do
             mapfile -t files < <(find bin/packages/aarch64_cortex-a53/daede -maxdepth 1 -type f -name "$package-*.apk")
-            [[ ${#files[@]} == 1 ]] || { echo "::error::Expected one $package APK, found ${#files[@]}"; exit 1; }
+            if [[ ${#files[@]} != 1 ]]; then
+              echo "::error::Expected one $package APK, found ${#files[@]}"
+              compile_log="logs/package/feeds/daede/$package/compile.txt"
+              if [ -f "$compile_log" ]; then tail -n 20 "$compile_log"; fi
+              exit 1
+            fi
             cp "${files[0]}" dist/daede/
           done
           {
