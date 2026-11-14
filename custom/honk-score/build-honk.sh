@@ -10,6 +10,7 @@ printf 'src-link honk %s\n' "${HONK_FEED_DIR:?HONK_FEED_DIR is required}" > feed
 ./scripts/feeds install -p honk honk
 printf '\nCONFIG_PACKAGE_honk=m\n' >> .config
 make defconfig
+grep -q '^CONFIG_TARGET_ARCH_PACKAGES="aarch64_cortex-a53"$' .config || { echo 'SDK is not aarch64_cortex-a53' >&2; exit 1; }
 HONK_VERSION="$HONK_VERSION" HONK_GIT_TAG="$HONK_GIT_TAG" \
     make -j2 package/honk/compile V=s CONFIG_PACKAGE_vmlinux-btf=
 mapfile -t packages < <(find bin/packages -type f -name 'honk-*.apk')

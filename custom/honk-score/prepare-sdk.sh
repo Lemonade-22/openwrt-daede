@@ -19,7 +19,6 @@ tar -xf "$root/$name" -C "$root/unpacked"
 mapfile -t directories < <(find "$root/unpacked" -mindepth 1 -maxdepth 1 -type d -name 'openwrt-sdk-*')
 [[ ${#directories[@]} == 1 ]] || { echo 'Unexpected SDK layout' >&2; exit 1; }
 sdk=${directories[0]}
-grep -q '^CONFIG_TARGET_ARCH_PACKAGES="aarch64_cortex-a53"$' "$sdk/.config" || { echo 'SDK is not aarch64_cortex-a53' >&2; exit 1; }
 {
     echo "SDK_DIR=$sdk"
     echo "SDK_URL=$base/$name"
