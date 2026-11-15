@@ -30,11 +30,21 @@ old = """if ! grep -aq 'index.html' \"${binary}\"; then
   exit 1
 fi
 echo \"honk: ${binary} contains the embedded doona UI\""""
-new = """if grep -aq 'index.html' \"${binary}\"; then
-  echo \"honk: ${binary} still contains an embedded UI\" >&2
+fetch = """if [ ! -f \"ci/fetch-doona.sh\" ]; then
+  echo \"honk: ci/fetch-doona.sh is missing, native-ui cannot be built\" >&2
   exit 1
 fi
-echo \"honk: ${binary} has no embedded UI\""""
+HONK_DOONA_DIR=\"$(bash ci/fetch-doona.sh \"${HONK_SRC}/.doona\")\"
+export HONK_DOONA_DIR
+if [ ! -f \"${HONK_DOONA_DIR}/index.html\" ]; then
+  echo \"honk: ${HONK_DOONA_DIR} has no index.html\" >&2
+  exit 1
+fi
+echo \"honk: embedding the doona UI from ${HONK_DOONA_DIR}\""""
+if fetch not in file_text:
+    raise SystemExit("doona fetch block not found")
+file_text = file_text.replace(fetch, 'unset HONK_DOONA_DIR\necho "honk: not embedding a UI"', 1)
+new = 'echo "honk: ${binary} built without native-ui"'
 if old not in file_text:
     raise SystemExit("embedded-UI check not found")
 file.write_text(file_text.replace(old, new, 1))

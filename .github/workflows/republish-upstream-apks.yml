@@ -119,8 +119,16 @@ jobs:
           ./scripts/feeds update honk
           ./scripts/feeds install -p honk honk
           printf '\nCONFIG_PACKAGE_honk=m\n' >> .config
+          set +e
           make defconfig
-          grep -q "^CONFIG_TARGET_ARCH_PACKAGES=\"$OPENWRT_ARCH\"$" .config
+          defconfig_status=$?
+          set -e
+          echo "defconfig exit ${defconfig_status}"
+          grep CONFIG_TARGET_ARCH_PACKAGES .config || true
+          grep -q "CONFIG_TARGET_ARCH_PACKAGES=\"$OPENWRT_ARCH\"" .config || {
+            echo "::error::SDK arch is not $OPENWRT_ARCH"
+            exit 1
+          }
       - name: Build clash and bare cores
         run: |
           set -euo pipefail
@@ -143,6 +151,13 @@ jobs:
           [[ -n "$honk" && -n "$btf" ]] || { echo "::error::Missing honk or vmlinux-btf-builtin"; exit 1; }
           curl -fL --retry 3 -o "upload/${OPENWRT_ARCH}-honk-native-ui-$honk" "$base/$honk"
           curl -fL --retry 3 -o "upload/${OPENWRT_ARCH}-$btf" "$base/$btf"
+          geo_base="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/packages/${OPENWRT_ARCH}/packages"
+          geo_page=$(curl -fsSL --retry 3 "$geo_base/")
+          geoip=$(printf '%s\n' "$geo_page" | grep -oE 'v2ray-geoip-[^" ]+\.apk' | head -n 1)
+          geosite=$(printf '%s\n' "$geo_page" | grep -oE 'v2ray-geosite-[^" ]+\.apk' | grep -v 'v2ray-geosite-ir-' | head -n 1)
+          [[ -n "$geoip" && -n "$geosite" ]] || { echo "::error::Missing v2ray-geoip or v2ray-geosite"; exit 1; }
+          curl -fL --retry 3 -o "upload/$geoip" "$geo_base/$geoip"
+          curl -fL --retry 3 -o "upload/$geosite" "$geo_base/$geosite"
           tmp=$(mktemp -d)
           gh release download "$DOONA_TAG" --repo Zakkaus/doona --dir "$tmp" --pattern 'doona-*.apk'
           mapfile -t panel < <(find "$tmp" -type f -name 'doona-*_*-r*.apk' ! -name 'doona-fonts-*' ! -name 'doona-precompressed-*')
@@ -168,6 +183,7 @@ jobs:
             - honk-native-ui: downloaded. Clash API, native API, embedded doona.
             - honk-clash and honk-bare: built here. The internal package name is still honk, so do not install them on top of each other.
             - vmlinux-btf-builtin: downloaded placeholder.
+            - v2ray-geoip and v2ray-geosite: downloaded from the OpenWrt packages feed for this architecture. The Iran geosite package is not included.
             - doona panel: ${{ inputs.doona_tag }}.
             - zashboard: latest release (${{ env.ZASHBOARD_TAG }}), dist.zip. It is a web bundle, not an architecture-specific apk.
 
