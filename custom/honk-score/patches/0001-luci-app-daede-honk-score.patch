@@ -1,0 +1,1999 @@
+diff --git a/luci-app-daede/Makefile b/luci-app-daede/Makefile
+index 6514a54abc46613e31659616c33cd04aeb3062ee..d936081bcdd82a125e8642e0f6c6c7e1da240907 100644
+--- a/luci-app-daede/Makefile
++++ b/luci-app-daede/Makefile
+@@ -12,33 +12,17 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
+ 
+ include $(INCLUDE_DIR)/package.mk
+ 
+-define Package/$(PKG_NAME)/config
+-	choice
+-		prompt "Backend dependency"
+-		default PACKAGE_$(PKG_NAME)_daed
+-		help
+-			Select which backend package luci-app-daede should pull in by default.
+-
+-	config PACKAGE_$(PKG_NAME)_daed
+-		bool "daed backend"
+-
+-	config PACKAGE_$(PKG_NAME)_dae
+-		bool "dae backend"
+-
+-	endchoice
+-endef
+-
+ define Package/$(PKG_NAME)
+ 	SECTION:=luci
+ 	CATEGORY:=LuCI
+ 	SUBMENU:=3. Applications
+ 	TITLE:=LuCI app for daede dashboard
+-	DEPENDS:=+luci-base +PACKAGE_$(PKG_NAME)_dae:dae +PACKAGE_$(PKG_NAME)_daed:daed
++	DEPENDS:=+luci-base +curl +ucode +ucode-mod-fs +ucode-mod-uci
+ 	PKGARCH:=all
+ endef
+ 
+ define Package/$(PKG_NAME)/description
+-	LuCI web interface for managing dae or daed backends.
++	LuCI web interface for managing dae, daed or honk backends.
+ endef
+ 
+ define Build/Prepare
+@@ -57,6 +41,11 @@ define Package/$(PKG_NAME)/conffiles
+ endef
+ 
+ define Package/$(PKG_NAME)/install
++	$(INSTALL_DIR) $(1)/etc/daed $(1)/www/daede-honk $(1)/www/cgi-bin $(1)/usr/share/luci-app-daede
++	$(CP) ./webui-dist/. $(1)/www/daede-honk/
++	$(INSTALL_BIN) ./root/www/cgi-bin/daede-honk $(1)/www/cgi-bin/daede-honk
++	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/honk-web.sh $(1)/usr/share/luci-app-daede/honk-web.sh
++	$(INSTALL_DATA) ./root/usr/share/luci-app-daede/honk-web-setup.uc $(1)/usr/share/luci-app-daede/honk-web-setup.uc
+ 	$(INSTALL_DIR) $(1)/etc/config
+ 	$(INSTALL_DATA) ./root/etc/config/daede $(1)/etc/config/daede
+ 
+@@ -73,6 +62,7 @@ define Package/$(PKG_NAME)/install
+ 	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/pkg-info.sh $(1)/usr/share/luci-app-daede/pkg-info.sh
+ 	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/update-geo.sh $(1)/usr/share/luci-app-daede/update-geo.sh
+ 	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/update-pkg.sh $(1)/usr/share/luci-app-daede/update-pkg.sh
++	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/honk-config.sh $(1)/usr/share/luci-app-daede/honk-config.sh
+ 	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/gen-dae-config.sh $(1)/usr/share/luci-app-daede/gen-dae-config.sh
+ 	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/proxy-check.sh $(1)/usr/share/luci-app-daede/proxy-check.sh
+ 	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/fetch-clash-yaml.sh $(1)/usr/share/luci-app-daede/fetch-clash-yaml.sh
+@@ -83,6 +73,9 @@ define Package/$(PKG_NAME)/install
+ 	$(INSTALL_DATA) $(CURDIR)/../dae/files/dae.config $(1)/usr/share/luci-app-daede/defaults/dae
+ 	$(INSTALL_DATA) $(CURDIR)/../daed/files/daed.config $(1)/usr/share/luci-app-daede/defaults/daed
+ 	$(INSTALL_DATA) ./root/etc/config/daede $(1)/usr/share/luci-app-daede/defaults/daede
++	$(INSTALL_DATA) ./root/usr/share/luci-app-daede/defaults/honk $(1)/usr/share/luci-app-daede/defaults/honk
++	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
++	$(INSTALL_DATA) ./root/lib/upgrade/keep.d/luci-app-daede-honk $(1)/lib/upgrade/keep.d/luci-app-daede-honk
+ 	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/refresh-index.sh $(1)/usr/share/luci-app-daede/refresh-index.sh
+ 	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/geo-cron.sh $(1)/usr/share/luci-app-daede/geo-cron.sh
+ 	$(INSTALL_BIN) ./root/usr/share/luci-app-daede/daed-sub-update.sh $(1)/usr/share/luci-app-daede/daed-sub-update.sh
+diff --git a/luci-app-daede/htdocs/luci-static/resources/view/daede/backend.js b/luci-app-daede/htdocs/luci-static/resources/view/daede/backend.js
+index f141f7458dd9f51e2d7695ff7086c08a4b3bbcb1..c61e2b0ed6e11e0e3d934edef9cf05638018d46d 100644
+--- a/luci-app-daede/htdocs/luci-static/resources/view/daede/backend.js
++++ b/luci-app-daede/htdocs/luci-static/resources/view/daede/backend.js
+@@ -14,6 +14,17 @@ const callServiceList = rpc.declare({
+ });
+ 
+ const BACKENDS = {
++	honk: {
++		name: 'honk',
++		label: 'honk',
++		uci: 'honk',
++		initd: '/etc/init.d/honk',
++		log: '/var/log/honk/honk.log',
++		pkg: 'honk',
++		config: '/etc/honk/daede.dae',
++		hasWebUI: false,
++		useNetns: false
++	},
+ 	daed: {
+ 		name: 'daed',
+ 		label: 'daed',
+@@ -67,9 +78,10 @@ function serviceStatus(name) {
+ function detectInstalledBackends() {
+ 	return Promise.all([
+ 		exists(BACKENDS.dae.initd),
+-		exists(BACKENDS.daed.initd)
++		exists(BACKENDS.daed.initd),
++		exists(BACKENDS.honk.initd)
+ 	]).then(function(r) {
+-		return { dae: r[0], daed: r[1] };
++		return { dae: r[0], daed: r[1], honk: r[2] };
+ 	});
+ }
+ 
+@@ -79,9 +91,10 @@ function detectRunning() {
+ 	   reliably tells dae from daed without substring false positives. */
+ 	return Promise.all([
+ 		execOk('/bin/pidof', ['dae']),
+-		execOk('/bin/pidof', ['daed'])
++		execOk('/bin/pidof', ['daed']),
++		execOk('/bin/pidof', ['honk-core'])
+ 	]).then(function(r) {
+-		return { dae: r[0], daed: r[1] };
++		return { dae: r[0], daed: r[1], honk: r[2] };
+ 	});
+ }
+ 
+@@ -117,7 +130,7 @@ function detectBackend() {
+ 		let name = preferred;
+ 
+ 		if (!name || !installed[name])
+-			name = installed.daed ? 'daed' : (installed.dae ? 'dae' : 'daed');
++			name = installed.daed ? 'daed' : (installed.dae ? 'dae' : (installed.honk ? 'honk' : 'daed'));
+ 
+ 		return {
+ 			name: name,
+@@ -130,7 +143,17 @@ function detectBackend() {
+ 	});
+ }
+ 
++function waitStarted(name, attempts) {
++	return serviceStatus(name).then(function(state) {
++		if (state.running) return state;
++		if (attempts <= 0) throw new Error(_('Service did not start in time.'));
++		return new Promise(function(resolve) { setTimeout(resolve, 250); })
++			.then(function() { return waitStarted(name, attempts - 1); });
++	});
++}
++
+ return baseclass.extend({
++	waitStarted: waitStarted,
+ 	BACKENDS: BACKENDS,
+ 	detectInstalledBackends: detectInstalledBackends,
+ 	detectRunning: detectRunning,
+diff --git a/luci-app-daede/htdocs/luci-static/resources/view/daede/config.js b/luci-app-daede/htdocs/luci-static/resources/view/daede/config.js
+index bb83ec1bdfe26ca71aaab92bd5b96ae1b904f2fa..2b32a1b640994c0ac056ca8bf945b2ed5bb2377b 100644
+--- a/luci-app-daede/htdocs/luci-static/resources/view/daede/config.js
++++ b/luci-app-daede/htdocs/luci-static/resources/view/daede/config.js
+@@ -2,6 +2,7 @@
+ 
+ 'use strict';
+ 'require uci';
++'require fs';
+ 'require network';
+ 'require view';
+ 'require view.daede.backend as backend';
+@@ -9,6 +10,7 @@
+ 'require view.daede.widgets as widgets';
+ 'require view.daede.dae as daeView';
+ 'require view.daede.daed as daedView';
++'require view.daede.honk as honkView';
+ 
+ return view.extend({
+ 	_loadContext: function() {
+@@ -79,11 +81,16 @@ return view.extend({
+ 		].filter(function(node) { return !!node; });
+ 
+ 		if (!ctx.installed[ctx.name]) {
+-			children.push(E('div', { 'class': 'dd-card dd-warning' }, _('Selected backend is not installed. Install dae or daed from the package feed first.')));
++			children.push(E('div', { 'class': 'dd-card dd-warning' }, _('Selected backend is not installed. Install dae, daed or honk from the package feed first.')));
++		} else if (ctx.name === 'honk') {
++			children.push(honkView.renderSettings());
+ 		} else if (ctx.name === 'dae') {
+-			children.push(daeView.renderDaeImportBanner());
++			if (ctx.name === 'dae')
++				children.push(daeView.renderDaeImportBanner());
+ 			children.push(daeView.renderDaeForms(ctx));
+-			children.push(daeView.renderDaeEditor());
++			if (ctx.name === 'dae') {
++				children.push(daeView.renderDaeEditor());
++			}
+ 		} else {
+ 			children.push(daedView.renderDaedSettings());
+ 		}
+diff --git a/luci-app-daede/htdocs/luci-static/resources/view/daede/converter.js b/luci-app-daede/htdocs/luci-static/resources/view/daede/converter.js
+index 455460caba26ea67c15ddf6109a4a597f06d4ce5..4af932cfa72e27f97a64a3a13f81da8814dee6ac 100644
+--- a/luci-app-daede/htdocs/luci-static/resources/view/daede/converter.js
++++ b/luci-app-daede/htdocs/luci-static/resources/view/daede/converter.js
+@@ -237,6 +237,7 @@ return view.extend({
+ 			backend.detectBackend(),
+ 			uci.load('dae').catch(function() {}),
+ 			uci.load('daed').catch(function() {}),
++			uci.load('honk').catch(function() {}),
+ 			uci.load('daede').catch(function() {}),
+ 			loadYamlParser()
+ 		]).then(function(values) {
+@@ -281,7 +282,7 @@ return view.extend({
+ 		const importStatus = E('div', { 'class': 'dd-conv-status' }, '');
+ 		const resultBody = E('div', { 'class': 'dd-conv-results' });
+ 
+-		[ 'dae', 'daed' ].forEach(function(name) {
++		[ 'dae', 'daed', 'honk' ].forEach(function(name) {
+ 			if (data.ctx.installed[name])
+ 				targetSelect.appendChild(E('option', { 'value': name, 'selected': state.target === name ? 'selected' : null }, name));
+ 		});
+@@ -1113,6 +1114,51 @@ return view.extend({
+ 			});
+ 		};
+ 
++
++        const importHonk = async function(items) {
++            const module = await import('/daede-honk/honk-client.js');
++            const endpoint = '/cgi-bin/daede-honk';
++            const session = await module.HonkClient.login(endpoint,
++                uci.get('honk', 'config', 'dashboard_username') || '',
++                uci.get('honk', 'config', 'dashboard_password') || '');
++            const client = new module.HonkClient(endpoint, session.token);
++            const call = (name, args) => client.request('mutation ' + name + ' { ignored }', args);
++            const existing = currentAirport();
++            const airportId = existing ? existing.id : airportSync.makeAirportId();
++            const name = airportName.value.trim();
++            const before = await client.snapshot();
++            const old = existing && before.providers.find(p => p.id === existing.subscription_id);
++            if (existing && !old) throw new Error(_('Managed subscription no longer exists; refresh the page.'));
++            const oldToken = old && String(old.url_redacted).match(/^http:\/\/127\.0\.0\.1\/cgi-bin\/daede-sub\?t=([A-Za-z0-9]{1,64})$/);
++            const token = ('honk' + Date.now().toString(36) + Math.random().toString(36).slice(2,12));
++            const stage = '/etc/daed/.daede-sub-stage-' + token;
++            await fs.write(stage, btoa(items.map(item => item.link).join('\n') + '\n'));
++            const res = await fs.exec(SNAPSHOT_HELPER, oldToken ? ['replace',oldToken[1],token] : ['publish',token]);
++            if (res.code) throw new Error(res.stderr || res.stdout);
++            const url = 'http://127.0.0.1/cgi-bin/daede-sub?t=' + (oldToken ? oldToken[1] : token);
++            let provider;
++            if (old) {
++                if (!oldToken) await call('UpdateSubscriptionLink',{id:old.id,link:url});
++                await call('UpdateSubscription',{id:old.id});
++                provider = old;
++            } else {
++                await call('ImportSubscription',{arg:{tag:name,link:url}});
++                provider = (await client.snapshot()).providers.find(p => p.name === name);
++            }
++            if (!provider) throw new Error(_('honk did not return the imported subscription.'));
++            let proxy = (await client.snapshot()).groups.find(g => g.name === 'proxy');
++            if (!proxy) {
++                await call('CreateGroup',{name:'proxy',policy:'score'});
++                proxy = (await client.snapshot()).groups.find(g => g.name === 'proxy');
++            }
++            await call('GroupAddSubscriptions',{id:proxy.id,subscriptionIDs:[provider.id]});
++            writeAirportRecord(existing, {id:airportId,backend:'honk',name:name,
++                sourceHash:state.sourceHash,groupId:proxy.id,subscriptionId:provider.id,nodeIds:[]});
++            await applyUciChanges();
++            items.forEach(item => { item.duplicate = true; item.selected = false; });
++            return {added:items.length,duplicates:0,failed:0};
++        };
++
+ 		importButton.addEventListener('click', function() {
+ 			const items = selectedResults();
+ 			if (!items.length)
+@@ -1131,7 +1177,7 @@ return view.extend({
+ 				return;
+ 			importButton.disabled = true;
+ 			setImportStatus(_('Importing node group…'));
+-			const action = state.target === 'dae' ? importDae(items) : importDaed(items);
++			const action = state.target === 'dae' ? importDae(items) : state.target === 'honk' ? importHonk(items) : importDaed(items);
+ 			action.then(function(result) {
+ 				let message = _('Node group imported: added %d, reused %d, failed %d')
+ 					.format(result.added, result.duplicates, result.failed);
+diff --git a/luci-app-daede/htdocs/luci-static/resources/view/daede/dae.js b/luci-app-daede/htdocs/luci-static/resources/view/daede/dae.js
+index 0b5a806d9cf04485aa4c126f9934ff24bd8ec000..1338fd929dda69da0e5cf13619fd53afad09f654 100644
+--- a/luci-app-daede/htdocs/luci-static/resources/view/daede/dae.js
++++ b/luci-app-daede/htdocs/luci-static/resources/view/daede/dae.js
+@@ -112,8 +112,9 @@ function mutedCell(section_id) {
+ /* Fill blank tags of a section type with unique <prefix>_<n> values so dae's
+    config generator always has a stable identifier. Runs after m.save() wrote
+    the form values into the uci session, before uci.save(). */
+-function autofillTags(stype, prefix) {
+-	const secs = uci.sections('dae', stype) || [];
++function autofillTags(stype, prefix, config) {
++	config = config || 'dae';
++	const secs = uci.sections(config, stype) || [];
+ 	const used = {};
+ 	secs.forEach(function(s) { if (s.tag) used[s.tag] = 1; });
+ 	let n = 1;
+@@ -121,7 +122,7 @@ function autofillTags(stype, prefix) {
+ 		if (s.tag) return;
+ 		while (used[prefix + '_' + n]) n++;
+ 		const t = prefix + '_' + n;
+-		uci.set('dae', s['.name'], 'tag', t);
++		uci.set(config, s['.name'], 'tag', t);
+ 		used[t] = 1; n++;
+ 	});
+ }
+@@ -196,8 +197,12 @@ function restoreAccordionState(mapNode, openTitles) {
+    commit the `dae` UCI package, then gen-dae-config.sh renders config.dae,
+    validates it and hot-reloads. */
+ function renderDaeForms(ctx) {
++	const be = ctx.backend;
++	const config = be.uci;
++	const isHonk = be.name === 'honk';
++	const generateAction = isHonk ? 'generate-honk' : 'generate';
+ 	let m, s, o;
+-	m = new form.Map('dae', null, null);
++	m = new form.Map(config, null, null);
+ 
+ 	/* Subscriptions */
+ 	s = m.section(form.GridSection, 'subscription', _('Subscriptions'), null);
+@@ -213,6 +218,7 @@ function renderDaeForms(ctx) {
+ 	o.textvalue = ellipsisCell;  /* keep long links from blowing up the row */
+ 	o.validate = function(sid, v) {
+ 		if (!v) return _('URL is required');
++		if (isHonk && !/^https?:\/\//.test(v)) return _('honk subscriptions must use HTTP or HTTPS');
+ 		if (!/^(https?|https-file|file):\/\//.test(v)) return _('Must start with http(s):// or file://');
+ 		return true;
+ 	};
+@@ -238,9 +244,9 @@ function renderDaeForms(ctx) {
+ 	o.editable = true;
+ 
+ 	/* Subscription / manual-node tags for the group filter dropdowns */
+-	const subTags = (uci.sections('dae', 'subscription') || [])
++	const subTags = (uci.sections(config, 'subscription') || [])
+ 		.map(function(x) { return x.tag; }).filter(function(x) { return !!x; });
+-	const nodeTags = (uci.sections('dae', 'node') || [])
++	const nodeTags = (uci.sections(config, 'node') || [])
+ 		.map(function(x) { return x.tag; }).filter(function(x) { return !!x; });
+ 
+ 	/* Groups (outbound) */
+@@ -255,16 +261,19 @@ function renderDaeForms(ctx) {
+ 	o.validate = function(sid, v) {
+ 		if (!v) return _('Name is required');
+ 		/* dae fatals on duplicate outbound names — keep group names unique */
+-		const dup = (uci.sections('dae', 'group') || []).some(function(g) {
++		const dup = (uci.sections(config, 'group') || []).some(function(g) {
+ 			return g['.name'] !== sid && g.name === v;
+ 		});
+ 		return dup ? _('Group name must be unique') : true;
+ 	};
+ 	o = s.option(form.ListValue, 'policy', _('Policy'));
+ 	o.value('min_moving_avg', _('Min moving average latency'));
+-	o.value('min', _('Min last latency'));
++	o.value(isHonk ? 'min_last_delay' : 'min', _('Min last latency'));
+ 	o.value('min_avg10', _('Min average of last 10'));
+-	o.value('random', _('Random'));
++	if (isHonk)
++		o.value('score', _('Score'));
++	else
++		o.value('random', _('Random'));
+ 	o.value('fixed(0)', _('Fixed (first node)'));
+ 	o.default = 'min_moving_avg';
+ 	o = s.option(form.DynamicList, 'source', _('Source'),
+@@ -276,7 +285,7 @@ function renderDaeForms(ctx) {
+ 	o.placeholder = '新加坡|日本';
+ 
+ 	/* Routing presets */
+-	const groupNames = (uci.sections('dae', 'group') || [])
++	const groupNames = (uci.sections(config, 'group') || [])
+ 		.map(function(x) { return x.name; }).filter(function(x) { return !!x; });
+ 	s = m.section(form.NamedSection, 'routing', 'routing', _('Routing'));
+ 	s.addremove = false;
+@@ -311,18 +320,20 @@ function renderDaeForms(ctx) {
+ 		_('Resolves everything else.'));
+ 	o.default = 'tcp+udp://dns.google:53';
+ 	o.placeholder = 'tcp+udp://dns.google:53';
+-	o = s.option(form.Value, 'response_ttl', _('DNS response TTL'),
+-		_('TTL returned to LAN DNS clients. 0 keeps dae default behavior.'));
+-	o.datatype = 'uinteger';
+-	o.default = '0';
+-	o.placeholder = '60';
++	if (!isHonk) {
++		o = s.option(form.Value, 'response_ttl', _('DNS response TTL'),
++			_('TTL returned to LAN DNS clients. 0 keeps dae default behavior.'));
++		o.datatype = 'uinteger';
++		o.default = '0';
++		o.placeholder = '60';
++	}
+ 
+ 	/* Logging — folded into the main form so the single Save button covers it
+ 	   too (no separate native save bar) */
+ 		/* Network interfaces — override dae auto WAN detect, fails on legacy swconfig (#15).
+ 		   Combobox: dropdown of real devices but still free-text for undetectable WANs */
+ 		const netDevs = (ctx && ctx.netDevs) || [];
+-		s = m.section(form.NamedSection, 'config', 'dae', _('Network interfaces'));
++		s = m.section(form.NamedSection, 'config', config, _('Network interfaces'));
+ 		s.addremove = false;
+ 		o = s.option(form.Value, 'lan_interface', _('LAN interface'),
+ 			_('Interface to proxy the LAN from. Usually br-lan.'));
+@@ -347,14 +358,16 @@ function renderDaeForms(ctx) {
+ 	o.value('trace', 'TRACE');
+ 	o.default = 'info';
+ 	o.rmempty = false;
+-	o = s.option(form.Value, 'log_maxsize', _('Max Log Size (MB)'),
+-		_('Rotate the log file once it grows past this many megabytes.'));
+-	o.datatype = 'uinteger';
+-	o.default = '1';
+-	o = s.option(form.Value, 'log_maxbackups', _('Max Log Backups'),
+-		_('Number of rotated log files to keep.'));
+-	o.datatype = 'uinteger';
+-	o.default = '1';
++	if (!isHonk) {
++		o = s.option(form.Value, 'log_maxsize', _('Max Log Size (MB)'),
++			_('Rotate the log file once it grows past this many megabytes.'));
++		o.datatype = 'uinteger';
++		o.default = '1';
++		o = s.option(form.Value, 'log_maxbackups', _('Max Log Backups'),
++			_('Number of rotated log files to keep.'));
++		o.datatype = 'uinteger';
++		o.default = '1';
++	}
+ 
+ 	const status = E('span', { 'class': 'dd-editor-status' }, '');
+ 	let renderSaveActions = function() {};
+@@ -383,15 +396,15 @@ function renderDaeForms(ctx) {
+ 		/* ensure the singleton sections exist before parsing the form —
+ 		   on installs where uci-defaults never seeded them, writing an
+ 		   option to a missing named section fails with ubus NOT_FOUND (4) */
+-		if (!uci.get('dae', 'routing')) uci.add('dae', 'routing', 'routing');
+-		if (!uci.get('dae', 'dns'))     uci.add('dae', 'dns', 'dns');
+-		if (!uci.get('dae', 'config'))  uci.add('dae', 'dae', 'config');
++		if (!uci.get(config, 'routing')) uci.add(config, 'routing', 'routing');
++		if (!uci.get(config, 'dns'))     uci.add(config, 'dns', 'dns');
++		if (!uci.get(config, 'config'))  uci.add(config, config, 'config');
+ 		return m.save(null, true)
+ 			.then(function() {
+ 				restoreLiveAccordions();
+ 				/* assign unique tags to any rows the user left blank */
+-				autofillTags('subscription', 'subscription');
+-				autofillTags('node', 'node');
++				autofillTags('subscription', 'subscription', config);
++				autofillTags('node', 'node', config);
+ 			})
+ 			.then(function() { return uci.save(); })
+ 			.then(function() {
+@@ -403,7 +416,7 @@ function renderDaeForms(ctx) {
+ 					return (ch && Object.keys(ch).length) ? uci.apply() : null;
+ 				});
+ 			})
+-			.then(function() { return fs.exec(GEN, ['generate']); })
++			.then(function() { return fs.exec(GEN, [generateAction]); })
+ 			.then(function(res) {
+ 				if (res && res.code !== 0) {
+ 					const err = (res.stderr || res.stdout || ('exit ' + res.code)).trim().split('\n')[0];
+@@ -416,10 +429,18 @@ function renderDaeForms(ctx) {
+ 					return;
+ 				}
+ 				flash(_('Starting…'));
+-				return fs.exec('/sbin/uci', ['set', 'dae.config.enabled=1'])
+-					.then(function() { return fs.exec('/sbin/uci', ['commit', 'dae']); })
+-					.then(function() { return fs.exec(backend.BACKENDS.dae.initd, ['enable']); })
+-					.then(function() { return fs.exec(backend.BACKENDS.dae.initd, ['start']); })
++				return backend.detectRunning().then(function(running) {
++					const other = Object.keys(running).find(function(name) { return name !== be.name && running[name]; });
++					if (other) throw new Error(_('%s is already running. Stop it before starting %s.').format(other, be.name));
++					return fs.exec('/sbin/uci', ['set', config + '.config.enabled=1']);
++				})
++					.then(function() { return fs.exec('/sbin/uci', ['commit', config]); })
++					.then(function() { return fs.exec(be.initd, ['enable']); })
++					.then(function() { return fs.exec(be.initd, ['start']); })
++					.then(function(res) {
++						if (res.code !== 0) throw new Error(res.stderr || res.stdout || ('exit ' + res.code));
++						return backend.waitStarted(be.name, 80).then(function() { return res; });
++					})
+ 					.then(function(r2) {
+ 						if (r2 && r2.code !== 0)
+ 							flash(_('Start failed: %s').format(r2.stderr || r2.stdout || ('exit ' + r2.code)), 'err', 9000);
+@@ -449,19 +470,19 @@ function renderDaeForms(ctx) {
+ 		/* beginner default: only Subscriptions starts open; nodes/groups/routing/dns/logging collapse */
+ 		organizeDaeSections(mapNode, [ _('Subscriptions') ]);
+ 
+-		const cardChildren = [ E('h4', { 'class': 'dd-card-title' }, _('dae Configuration')) ];
++		const cardChildren = [ E('h4', { 'class': 'dd-card-title' }, isHonk ? _('honk Configuration') : _('dae Configuration')) ];
+ 		cardChildren.push(mapNode);
+ 
+ 		/* state-aware primary action: running → one "Save and Apply"; stopped →
+ 		   "Save config" (secondary) + "Save and Start" (primary). Starting the
+ 		   proxy is an explicit choice, never an implicit side effect of saving. */
+ 		return backend.detectRunning().then(function(rr) {
+-			const running = rr && rr.dae;
++			const running = rr && rr[be.name];
+ 
+ 			/* "Update all subscriptions" only helps while dae runs (hot reload
+ 			   re-pulls them). A stopped dae re-fetches every subscription on
+ 			   start, so there is nothing to update — hide the button then. */
+-			if (running) {
++			if (running && !isHonk) {
+ 				const upBtn = E('button', { 'class': 'cbi-button cbi-button-action' }, _('Update all subscriptions'));
+ 				const upMsg = E('span', { 'class': 'dd-meta', 'style': 'margin-left:8px;display:none' }, '');
+ 				const setUp = function(text, kind) {
+@@ -475,7 +496,7 @@ function renderDaeForms(ctx) {
+ 					ev.preventDefault();
+ 					upBtn.disabled = true;
+ 					setUp(_('Updating…'));
+-					fs.exec(backend.BACKENDS.dae.initd, ['hot_reload']).then(function(res) {
++					fs.exec(be.initd, ['hot_reload']).then(function(res) {
+ 						if (res && res.code !== 0)
+ 							setUp(_('Update failed: %s').format(res.stderr || res.stdout || ('exit ' + res.code)), 'err');
+ 						else
+diff --git a/luci-app-daede/htdocs/luci-static/resources/view/daede/honk.js b/luci-app-daede/htdocs/luci-static/resources/view/daede/honk.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..25c161ed7a2877257d08a5f56be403aefb56169d
+--- /dev/null
++++ b/luci-app-daede/htdocs/luci-static/resources/view/daede/honk.js
+@@ -0,0 +1,36 @@
++'use strict';
++'require baseclass';
++'require form';
++'require fs';
++'require uci';
++'require ui';
++
++function renderSettings() {
++    const m = new form.Map('honk');
++    const s = m.section(form.NamedSection, 'config', 'honk');
++    s.anonymous = true;
++    let o = s.option(form.Value, 'dashboard_username', _('Panel Username'));
++    o.placeholder = 'admin'; o.rmempty = false;
++    o = s.option(form.Value, 'dashboard_password', _('Panel Password'));
++    o.password = true; o.rmempty = false;
++    const status = E('span', {'class':'dd-editor-status'});
++    const save = E('button', {'class':'cbi-button cbi-button-apply'}, _('Save and initialize panel'));
++    save.addEventListener('click', async function() {
++        save.disabled = true;
++        try {
++            await m.save(); await uci.save(); await uci.apply();
++            const res = await fs.exec('/usr/share/luci-app-daede/honk-web.sh', ['prepare']);
++            if (res.code) throw new Error(res.stderr || res.stdout);
++            status.textContent = _('honk panel is ready.');
++        } catch (e) { status.textContent = e.message; }
++        finally { save.disabled = false; }
++    });
++    return m.render().then(function(node) {
++        return E('div', {'class':'dd-card'}, [
++            E('h4', {}, _('honk Panel')),
++            E('p', {}, _('These credentials initialize the panel on first use. For an existing account enter its current credentials. Nodes, groups, DNS and routing are managed in the WebUI. Use the shared subscription page to import subscriptions.')),
++            node, E('div', {'class':'dd-actions'}, [save, ' ', E('a', {'class':'cbi-button cbi-button-action','href':'/daede-honk/','target':'_blank','rel':'noopener'}, _('Open WebUI')), ' ', status])
++        ]);
++    });
++}
++return baseclass.extend({renderSettings:renderSettings});
+diff --git a/luci-app-daede/htdocs/luci-static/resources/view/daede/updates.js b/luci-app-daede/htdocs/luci-static/resources/view/daede/updates.js
+index c144f24e622ca84140cf0bac2e71b8ad2c04b0e0..294de8c9dbcfa77b4fc46499a5f9a556ae2d89b9 100644
+--- a/luci-app-daede/htdocs/luci-static/resources/view/daede/updates.js
++++ b/luci-app-daede/htdocs/luci-static/resources/view/daede/updates.js
+@@ -155,6 +155,7 @@ return view.extend({
+ 			}).catch(function() { indexStartFailed = true; }),
+ 			backend.detectBackend(),
+ 			uci.load('daed').catch(function() {}),
++			uci.load('honk').catch(function() {}),
+ 			uci.load('daede').catch(function() {})
+ 		]).then(function(r) {
+ 			return r[1];
+@@ -171,6 +172,7 @@ return view.extend({
+ 		addCorePkg(ctx.name);
+ 		addCorePkg('daed');
+ 		addCorePkg('dae');
++		if (ctx.installed.honk) addCorePkg('honk');
+ 
+ 		const dataBody = E('div', { 'id': 'dd-up-data' }, E('em', {}, _('Probing…')));
+ 		const pkgBody  = E('div', { 'id': 'dd-up-pkg'  }, E('em', {}, _('Probing…')));
+@@ -236,7 +238,7 @@ return view.extend({
+ 			[exportBtn, importBtn, resetBtn].forEach(function(b) { b.disabled = true; });
+ 			button.textContent = _('Working…');
+ 			return uci.changes().then(function(changes) {
+-				if (['dae', 'daed', 'daede'].some(function(name) { return changes && changes[name] && changes[name].length; }))
++				if (['dae', 'daed', 'honk', 'daede'].some(function(name) { return changes && changes[name] && changes[name].length; }))
+ 					throw new Error(_('Apply or discard pending daede changes first.'));
+ 				return operation();
+ 			}).catch(showBackupError).finally(function() {
+@@ -282,7 +284,7 @@ return view.extend({
+ 		};
+ 		const reloadConfig = function(message) {
+ 			daedSession.clear(window.localStorage);
+-			['dae', 'daed', 'daede'].forEach(function(name) { uci.unload(name); });
++			['dae', 'daed', 'honk', 'daede'].forEach(function(name) { uci.unload(name); });
+ 			ui.showModal(_('Configuration restored'), [
+ 				E('p', {}, message),
+ 				E('div', { 'class': 'right' }, E('button', {
+@@ -291,7 +293,7 @@ return view.extend({
+ 			]);
+ 		};
+ 		exportBtn.addEventListener('click', async function() {
+-			if (!await confirmBackup(_('Export briefly stops running dae/daed services to back up the database safely, then resumes them. Continue?'))) return;
++			if (!await confirmBackup(_('Export briefly stops running proxy services to back up the database safely, then resumes them. Continue?'))) return;
+ 			configOperation(exportBtn, function() {
+ 				return execBackup(['export']).then(function(res) {
+ 					const bin = atob((res.stdout || '').trim());
+@@ -333,7 +335,7 @@ return view.extend({
+ 			});
+ 		});
+ 		resetBtn.addEventListener('click', async function() {
+-			if (!await confirmBackup(_('Restore ALL daede defaults? This clears dae/daed settings, nodes, subscriptions and daed dashboard accounts/data. Export a backup first if needed. Both backends will remain disabled. Installed programs and GeoData are kept.'))) return;
++			if (!await confirmBackup(_('Restore ALL daede defaults? This clears dae/daed/honk settings, nodes, subscriptions and daed dashboard accounts/data. Export a backup first if needed. All backends will remain disabled. Installed programs and GeoData are kept.'))) return;
+ 			configOperation(resetBtn, function() {
+ 				return execBackup(['reset']).then(waitBackup).then(function() {
+ 					reloadConfig(_('All defaults restored. Both backends are disabled. Configure your nodes and routing before starting manually.'));
+diff --git a/luci-app-daede/htdocs/luci-static/resources/view/daede/widgets.js b/luci-app-daede/htdocs/luci-static/resources/view/daede/widgets.js
+index 843fcba49d03bc5621b2bd663d0c98c920cc1d50..c88b1d5e0a114d31f13b41a0a4452e388742c692 100644
+--- a/luci-app-daede/htdocs/luci-static/resources/view/daede/widgets.js
++++ b/luci-app-daede/htdocs/luci-static/resources/view/daede/widgets.js
+@@ -28,8 +28,8 @@ function restartService(be) {
+ }
+ 
+ function rejectIfOtherRunning(be, running) {
+-	const other = be.name === 'dae' ? 'daed' : 'dae';
+-	if (!running || !running[other])
++	const other = Object.keys(backend.BACKENDS).find(function(name) { return name !== be.name && running && running[name]; });
++	if (!other)
+ 		return Promise.resolve();
+ 
+ 	return Promise.reject(new Error(_('%s is already running. Stop %s before starting %s because both backends share the same eBPF/cgroup attachment.').format(other, other, be.name)));
+@@ -72,7 +72,7 @@ function waitForService(be, turnOn, attempts) {
+ }
+ 
+ function renderBackendSwitcher(ctx, onSwitched, initialHint) {
+-	if (!ctx.installed.dae && !ctx.installed.daed)
++	if (!Object.keys(backend.BACKENDS).some(function(name) { return ctx.installed[name]; }))
+ 		return null;
+ 
+ 	const wrap = E('div', { 'class': 'dd-card dd-backend-card' }, [
+@@ -93,9 +93,9 @@ function renderBackendSwitcher(ctx, onSwitched, initialHint) {
+ 	const stopIfRunning = function(running) {
+ 		const stops = [];
+ 
+-		['dae', 'daed'].forEach(function(name) {
++		Object.keys(backend.BACKENDS).forEach(function(name) {
+ 			if (running && running[name])
+-				stops.push(execChecked(backend.BACKENDS[name].initd, ['stop'])
++				stops.push(toggleService(backend.BACKENDS[name], false)
+ 					.then(function() { return waitForService(backend.BACKENDS[name], false, 40); }));
+ 		});
+ 
+@@ -105,7 +105,7 @@ function renderBackendSwitcher(ctx, onSwitched, initialHint) {
+ 		return Promise.all(stops);
+ 	};
+ 
+-	['daed', 'dae'].forEach(function(name) {
++	['daed', 'dae', 'honk'].forEach(function(name) {
+ 		const active = ctx.name === name;
+ 		const installed = !!ctx.installed[name];
+ 		const btn = E('button', {
+diff --git a/luci-app-daede/po/templates/daede.pot b/luci-app-daede/po/templates/daede.pot
+index 316379ebc6375ff31f9c62ddb0e34b9f3f3af3c6..11dc03cc693302a7f8a4afd9aa9dd1737b52a0f5 100644
+--- a/luci-app-daede/po/templates/daede.pot
++++ b/luci-app-daede/po/templates/daede.pot
+@@ -897,3 +897,24 @@ msgstr ""
+ 
+ msgid "Debug and trace show per-connection routing details, but increase CPU usage and log volume. Enable them only while troubleshooting."
+ msgstr ""
++
++msgid "Score"
++msgstr ""
++
++msgid "honk Configuration"
++msgstr ""
++
++msgid "honk subscriptions must use HTTP or HTTPS"
++msgstr ""
++
++msgid "%s is already running. Stop it before starting %s."
++msgstr ""
++
++msgid "Selected backend is not installed. Install dae, daed or honk from the package feed first."
++msgstr ""
++
++msgid "Export briefly stops running proxy services to back up the database safely, then resumes them. Continue?"
++msgstr ""
++
++msgid "Restore ALL daede defaults? This clears dae/daed/honk settings, nodes, subscriptions and daed dashboard accounts/data. Export a backup first if needed. All backends will remain disabled. Installed programs and GeoData are kept."
++msgstr ""
+diff --git a/luci-app-daede/po/zh-cn/daede.po b/luci-app-daede/po/zh-cn/daede.po
+index dfcbc528b1beeb1a2015599ec4c3ee8a2ded02a5..e3021410b26d1dc2f922e8cc565c8a114e1e7f08 100644
+--- a/luci-app-daede/po/zh-cn/daede.po
++++ b/luci-app-daede/po/zh-cn/daede.po
+@@ -1194,3 +1194,24 @@ msgstr "确认配置操作"
+ 
+ msgid "Continue"
+ msgstr "继续"
++
++msgid "Score"
++msgstr "综合评分（score）"
++
++msgid "honk Configuration"
++msgstr "honk 配置"
++
++msgid "honk subscriptions must use HTTP or HTTPS"
++msgstr "honk 订阅必须使用 HTTP 或 HTTPS"
++
++msgid "%s is already running. Stop it before starting %s."
++msgstr "%s 正在运行，请先停止，再启动 %s。"
++
++msgid "Selected backend is not installed. Install dae, daed or honk from the package feed first."
++msgstr "所选后端尚未安装，请先从软件源安装 dae、daed 或 honk。"
++
++msgid "Export briefly stops running proxy services to back up the database safely, then resumes them. Continue?"
++msgstr "导出时会短暂停止正在运行的代理服务以安全备份数据库，然后恢复运行。是否继续？"
++
++msgid "Restore ALL daede defaults? This clears dae/daed/honk settings, nodes, subscriptions and daed dashboard accounts/data. Export a backup first if needed. All backends will remain disabled. Installed programs and GeoData are kept."
++msgstr "恢复 daede 的全部默认设置？这会清除 dae/daed/honk 设置、节点、订阅以及 daed 面板账号和数据。请先按需导出备份。所有后端保持禁用，已安装程序和地理数据将保留。"
+diff --git a/luci-app-daede/po/zh_Hans/daede.po b/luci-app-daede/po/zh_Hans/daede.po
+index b4ec479c0b55fa57d3c960075fd43ada27695cb3..9dc0bf921983ed61641fec35877aae10ef0a7d51 100644
+--- a/luci-app-daede/po/zh_Hans/daede.po
++++ b/luci-app-daede/po/zh_Hans/daede.po
+@@ -1176,3 +1176,24 @@ msgstr "确认配置操作"
+ 
+ msgid "Continue"
+ msgstr "继续"
++
++msgid "Score"
++msgstr "综合评分（score）"
++
++msgid "honk Configuration"
++msgstr "honk 配置"
++
++msgid "honk subscriptions must use HTTP or HTTPS"
++msgstr "honk 订阅必须使用 HTTP 或 HTTPS"
++
++msgid "%s is already running. Stop it before starting %s."
++msgstr "%s 正在运行，请先停止，再启动 %s。"
++
++msgid "Selected backend is not installed. Install dae, daed or honk from the package feed first."
++msgstr "所选后端尚未安装，请先从软件源安装 dae、daed 或 honk。"
++
++msgid "Export briefly stops running proxy services to back up the database safely, then resumes them. Continue?"
++msgstr "导出时会短暂停止正在运行的代理服务以安全备份数据库，然后恢复运行。是否继续？"
++
++msgid "Restore ALL daede defaults? This clears dae/daed/honk settings, nodes, subscriptions and daed dashboard accounts/data. Export a backup first if needed. All backends will remain disabled. Installed programs and GeoData are kept."
++msgstr "恢复 daede 的全部默认设置？这会清除 dae/daed/honk 设置、节点、订阅以及 daed 面板账号和数据。请先按需导出备份。所有后端保持禁用，已安装程序和地理数据将保留。"
+diff --git a/luci-app-daede/root/lib/upgrade/keep.d/luci-app-daede-honk b/luci-app-daede/root/lib/upgrade/keep.d/luci-app-daede-honk
+new file mode 100644
+index 0000000000000000000000000000000000000000..13b7d38e53521a274f0ceaca59b82c072bb2a6e6
+--- /dev/null
++++ b/luci-app-daede/root/lib/upgrade/keep.d/luci-app-daede-honk
+@@ -0,0 +1,2 @@
++/etc/config/honk
++/etc/honk/
+diff --git a/luci-app-daede/root/usr/share/luci-app-daede/config-backup.sh b/luci-app-daede/root/usr/share/luci-app-daede/config-backup.sh
+index 1f93b56b1f9c4a73f9ace0517464847b8fc81c22..cbf8053c47ff51fa77f7d54d782f142c38f7e7c3 100755
+--- a/luci-app-daede/root/usr/share/luci-app-daede/config-backup.sh
++++ b/luci-app-daede/root/usr/share/luci-app-daede/config-backup.sh
+@@ -10,7 +10,7 @@ LOCK=/tmp/luci-app-daede.config.lock
+ SHARE=/usr/share/luci-app-daede
+ MAX_TAR=184320 # Base64 must fit inside the ubus reply (~240 KiB).
+ MAX_RAW=16777216
+-FILES="etc/config/dae etc/config/daed etc/config/daede etc/dae/config.dae etc/daed/wing.db etc/daed/wing.db-wal etc/daed/wing.db-shm"
++FILES="etc/honk/config.dae etc/honk/data/state/honk.db etc/honk/data/state/honk.db-wal etc/honk/data/state/honk.db-shm etc/config/dae etc/config/daed etc/config/honk etc/config/daede etc/honk/daede.dae etc/honk/daede.secret etc/dae/config.dae etc/daed/wing.db etc/daed/wing.db-wal etc/daed/wing.db-shm"
+ WORK=""
+ SNAPSHOT=0
+ MUTATING=0
+@@ -39,7 +39,7 @@ paths() {
+ 	done
+ }
+ check_paths() {
+-	for dir in /etc/config /etc/dae /etc/daed /etc/dae/subscriptions; do
++	for dir in /etc/config /etc/dae /etc/daed /etc/honk /etc/dae/subscriptions; do
+ 		[ ! -L "$dir" ] || fail "refusing symlink: $dir"
+ 	done
+ 	paths / > "$WORK/paths"
+@@ -66,20 +66,20 @@ snapshot() {
+ 	SNAPSHOT=1
+ }
+ stop_backends() {
+-	for svc in dae daed; do
++	for svc in dae daed honk; do
+ 		[ -x "/etc/init.d/$svc" ] || continue
+ 		if /etc/init.d/"$svc" running >/dev/null 2>&1; then RESTART="$RESTART $svc"; fi
+ 		/etc/init.d/"$svc" stop >/dev/null 2>&1 || fail "failed to stop $svc; configuration unchanged"
+ 	done
+ 	# procd termination can be asynchronous. Never copy a live SQLite database.
+ 	for attempt in 1 2 3 4 5; do
+-		if ! pidof dae daed daed-guard >/dev/null 2>&1; then return; fi
++		if ! pidof dae daed daed-guard honk-core >/dev/null 2>&1; then return; fi
+ 		sleep 1
+ 	done
+ 	fail 'backend still running; configuration unchanged'
+ }
+ disable_backends() {
+-	for svc in dae daed; do
++	for svc in dae daed honk; do
+ 		if [ -f "/etc/config/$svc" ]; then
+ 			config -q set "$svc.config=$svc" || return 1
+ 			config -q set "$svc.config.enabled=0" || return 1
+@@ -149,7 +149,7 @@ validate_archive() {
+ 	[ -z "$(sort "$WORK/entries" | uniq -d)" ] || fail 'duplicate archive entry'
+ 	while IFS= read -r p; do
+ 		case "$p" in
+-			etc/config/dae|etc/config/daed|etc/config/daede|etc/dae/config.dae|etc/daed/wing.db|etc/daed/wing.db-wal|etc/daed/wing.db-shm) ;;
++			etc/honk/config.dae|etc/honk/data/state/honk.db|etc/honk/data/state/honk.db-wal|etc/honk/data/state/honk.db-shm|etc/config/dae|etc/config/daed|etc/config/honk|etc/config/daede|etc/honk/daede.dae|etc/honk/daede.secret|etc/dae/config.dae|etc/daed/wing.db|etc/daed/wing.db-wal|etc/daed/wing.db-shm) ;;
+ 			etc/dae/subscriptions/*.sub)
+ 				name="${p#etc/dae/subscriptions/}"
+ 				case "${name%.sub}" in ''|*[!A-Za-z0-9_]*) fail 'invalid subscription path' ;; esac ;;
+@@ -162,7 +162,7 @@ validate_archive() {
+ 	mkdir -p "$WORK/after"
+ 	tar -xf "$WORK/import.tar" -C "$WORK/after"
+ 	found=0
+-	for svc in dae daed daede; do
++	for svc in dae daed honk daede; do
+ 		[ -f "$WORK/after/etc/config/$svc" ] || continue
+ 		found=1
+ 		/sbin/uci -c "$WORK/after/etc/config" -t "$WORK/uci" -q export "$svc" >/dev/null || fail "invalid $svc configuration"
+@@ -172,7 +172,7 @@ validate_archive() {
+ 		[ -f "$WORK/after/etc/daed/wing.db" ] || fail 'database WAL has no database'
+ 	fi
+ 	ab="$(/sbin/uci -c "$WORK/after/etc/config" -t "$WORK/uci" -q get daede.config.active_backend || echo dae)"
+-	case "$ab" in dae|daed) ;; *) fail 'invalid backend in backup' ;; esac
++	case "$ab" in dae|daed|honk) ;; *) fail 'invalid backend in backup' ;; esac
+ 	[ -x "/etc/init.d/$ab" ] || fail "backup backend $ab is not installed"
+ }
+ run_action() {
+@@ -182,12 +182,14 @@ run_action() {
+ 	if [ "$ACTION" = import ]; then validate_archive; fi
+ 	if [ "$ACTION" = reset ]; then
+ 		mkdir -p "$WORK/after/etc/config"
+-		for svc in dae daed daede; do
++		for svc in dae daed honk daede; do
+ 			cp "$SHARE/defaults/$svc" "$WORK/after/etc/config/$svc"
+ 		done
+ 		"$SHARE/config-defaults.sh" "$WORK/after/etc/config"
+ 		if [ ! -x /etc/init.d/daed ]; then
+-			/sbin/uci -c "$WORK/after/etc/config" -t "$WORK/uci" set daede.config.active_backend=dae
++			reset_backend=dae
++			[ -x /etc/init.d/dae ] || { [ ! -x /etc/init.d/honk ] || reset_backend=honk; }
++			/sbin/uci -c "$WORK/after/etc/config" -t "$WORK/uci" set "daede.config.active_backend=$reset_backend"
+ 			/sbin/uci -c "$WORK/after/etc/config" -t "$WORK/uci" commit daede
+ 		fi
+ 	fi
+@@ -226,7 +228,7 @@ run_action() {
+ 	else
+ 		# Preserve the imported active backend's enabled flag. The other backend
+ 		# stays disabled even when the archive was made on a dual-backend router.
+-		for svc in dae daed; do
++		for svc in dae daed honk; do
+ 			[ "$svc" = "$ab" ] || [ ! -f "/etc/config/$svc" ] || { config -q set "$svc.config.enabled=0"; config -q commit "$svc"; }
+ 		done
+ 		sync_cron
+diff --git a/luci-app-daede/root/usr/share/luci-app-daede/config-defaults.sh b/luci-app-daede/root/usr/share/luci-app-daede/config-defaults.sh
+index 6c4c9df236b184216110d54dd3ef85da4172d907..7074c11c1c4b8123ae54b3cebedfca618f19957d 100755
+--- a/luci-app-daede/root/usr/share/luci-app-daede/config-defaults.sh
++++ b/luci-app-daede/root/usr/share/luci-app-daede/config-defaults.sh
+@@ -7,25 +7,28 @@ if [ "$#" -gt 0 ]; then
+ 	uci() { /sbin/uci -c "$config_dir" -t "$config_dir/.uci" "$@"; }
+ fi
+ 
+-if ! uci -q get dae.config.lan_interface >/dev/null 2>&1; then
+-	uci -q set dae.config.lan_interface='br-lan'
+-fi
+-if ! uci -q show dae | grep -q "=group$"; then
+-	g="$(uci add dae group)"
+-	uci -q set "dae.$g.name=proxy"
+-	uci -q set "dae.$g.policy=min_moving_avg"
+-fi
+-if ! uci -q get dae.routing >/dev/null 2>&1; then
+-	uci -q set dae.routing=routing
+-	uci -q set dae.routing.private_direct=1
+-	uci -q set dae.routing.cn_direct=1
+-	uci -q set dae.routing.block_ads=0
+-	uci -q set dae.routing.fallback=proxy
+-fi
+-if ! uci -q get dae.dns >/dev/null 2>&1; then
+-	uci -q set dae.dns=dns
+-	uci -q set dae.dns.cn_upstream='udp://dns.alidns.com:53'
+-	uci -q set dae.dns.fallback_upstream='tcp+udp://dns.google:53'
+-	uci -q set dae.dns.response_ttl='0'
+-fi
+-uci -q commit dae
++for package in dae honk; do
++	uci -q get "$package.config" >/dev/null 2>&1 || continue
++	if ! uci -q get "$package.config.lan_interface" >/dev/null 2>&1; then
++		uci -q set "$package.config.lan_interface=br-lan"
++	fi
++	if ! uci -q show "$package" | grep -q "=group$"; then
++		g="$(uci add "$package" group)"
++		uci -q set "$package.$g.name=proxy"
++		uci -q set "$package.$g.policy=min_moving_avg"
++	fi
++	if ! uci -q get "$package.routing" >/dev/null 2>&1; then
++		uci -q set "$package.routing=routing"
++		uci -q set "$package.routing.private_direct=1"
++		uci -q set "$package.routing.cn_direct=1"
++		uci -q set "$package.routing.block_ads=0"
++		uci -q set "$package.routing.fallback=proxy"
++	fi
++	if ! uci -q get "$package.dns" >/dev/null 2>&1; then
++		uci -q set "$package.dns=dns"
++		uci -q set "$package.dns.cn_upstream=udp://dns.alidns.com:53"
++		uci -q set "$package.dns.fallback_upstream=tcp+udp://dns.google:53"
++		uci -q set "$package.dns.response_ttl=0"
++	fi
++	uci -q commit "$package"
++done
+diff --git a/luci-app-daede/root/usr/share/luci-app-daede/defaults/honk b/luci-app-daede/root/usr/share/luci-app-daede/defaults/honk
+new file mode 100644
+index 0000000000000000000000000000000000000000..328ed1ad9da2985d72364741fa3f831afc08becb
+--- /dev/null
++++ b/luci-app-daede/root/usr/share/luci-app-daede/defaults/honk
+@@ -0,0 +1,6 @@
++config honk 'config'
++	option enabled '0'
++	option config_file '/etc/honk/config.dae'
++	option store 'file'
++	option data_dir '/etc/honk/data'
++	option lan_interface 'br-lan'
+diff --git a/luci-app-daede/root/usr/share/luci-app-daede/gen-dae-config.sh b/luci-app-daede/root/usr/share/luci-app-daede/gen-dae-config.sh
+index 51b44949e3999cb069fbfa2b76ea2d5d97cab54f..8cbf019d542c302a867f1a3916145161b44ff6bc 100644
+--- a/luci-app-daede/root/usr/share/luci-app-daede/gen-dae-config.sh
++++ b/luci-app-daede/root/usr/share/luci-app-daede/gen-dae-config.sh
+@@ -17,8 +17,18 @@
+ 
+ . /lib/functions.sh
+ 
++FORM_PACKAGE=dae
+ CONFIG_DAE="/etc/dae/config.dae"
++if [ "$1" = generate-honk ]; then
++	FORM_PACKAGE=honk
++	CONFIG_DAE="/etc/honk/daede.dae"
++fi
+ TMP_GEN="/tmp/dae-gen.dae"
++if [ "$FORM_PACKAGE" = honk ]; then
++	umask 077
++	TMP_GEN="$(mktemp /tmp/honk-gen.XXXXXX)" || exit 1
++	trap 'rm -f "$TMP_GEN"' EXIT HUP INT TERM
++fi
+ DAE_BIN="/usr/bin/dae"
+ DAE_INITD="/etc/init.d/dae"
+ SUBS_DIR="/etc/dae/subscriptions"
+@@ -56,6 +66,11 @@ emit_sub() {
+ 	config_get_bool enabled "$s" enabled 1
+ 	[ "$enabled" = "1" ] || return 0
+ 	url="$(sanitize "$url")"
++	if [ "$FORM_PACKAGE" = honk ]; then
++		case "$url" in http://*|https://*) ;; *)
++			echo "honk subscriptions must use HTTP or HTTPS" >&2; SUB_ERROR=1; return 1 ;;
++		esac
++	fi
+ 	[ -n "$url" ] || return 0
+ 	tag="$(dae_tag "$(sanitize "$tag")")"
+ 	if [ -n "$tag" ]; then
+@@ -89,6 +104,13 @@ emit_group() {
+ 	local s="$1" name policy
+ 	config_get name "$s" name ""
+ 	config_get policy "$s" policy "min_moving_avg"
++	if [ "$FORM_PACKAGE" = honk ]; then
++		case "$policy" in
++			min) policy=min_last_delay ;;
++			score|min_moving_avg|min_last_delay|min_avg10|fixed\(0\)) ;;
++			*) echo "unsupported honk group policy: $policy" >&2; GROUP_ERROR=1; return 1 ;;
++		esac
++	fi
+ 	name="$(sanitize "$name")"
+ 	[ -n "$name" ] || return 0
+ 	# dae fatals on duplicate outbound names; keep the first, skip later dupes
+@@ -128,6 +150,10 @@ emit_group() {
+ 	# name filter with no source = filter the whole pool by name
+ 	if [ "$emitted" = 0 ] && [ -n "$KW_ACC" ]; then
+ 		GROUP_BUF="${GROUP_BUF}        filter: name(${KW_ACC})
++"
++	fi
++	if [ "$FORM_PACKAGE" = honk ] && [ "$emitted" = 0 ] && [ -z "$KW_ACC" ]; then
++		GROUP_BUF="${GROUP_BUF}        filter: name(regex: '.*')
+ "
+ 	fi
+ 	GROUP_BUF="${GROUP_BUF}        policy: ${policy}
+@@ -187,7 +213,7 @@ _collect_kw() {
+ }
+ 
+ generate() {
+-	config_load dae
++	config_load "$FORM_PACKAGE"
+ 
+ 	# global overridable knobs (fall back to defaults)
+ 	local dial_mode log_level wan_interface lan_interface
+@@ -199,14 +225,19 @@ generate() {
+ 	SUB_BUF=""; NODE_BUF=""; GROUP_BUF=""; FIRST_GROUP=""; GROUP_NAMES_SEEN=""
+ 	SUB_TAGS=""
+ 	config_foreach collect_subtag subscription
++	SUB_ERROR=0; GROUP_ERROR=0
+ 	config_foreach emit_sub subscription
+ 	config_foreach emit_node node
+ 	config_foreach emit_group group
++	[ "$SUB_ERROR" = 0 ] && [ "$GROUP_ERROR" = 0 ] || return 1
+ 
+ 	# fall back to a default group when none defined
+ 	if [ -z "$GROUP_BUF" ]; then
++		local default_filter=""
++		[ "$FORM_PACKAGE" != honk ] || default_filter="        filter: name(regex: '.*')
++"
+ 		GROUP_BUF="    proxy {
+-        policy: min_moving_avg
++${default_filter}        policy: min_moving_avg
+     }
+ "
+ 		FIRST_GROUP="proxy"
+@@ -236,6 +267,10 @@ generate() {
+ 		echo "    tproxy_port_protect: true"
+ 		echo "    so_mark_from_dae: 0"
+ 		echo "    log_level: ${log_level}"
++		if [ "$FORM_PACKAGE" = honk ]; then
++			echo "    data_dir: '/etc/honk/data'"
++			echo "    log_file: '/var/log/honk/honk.log'"
++		fi
+ 		[ -n "$lan_interface" ] && echo "    lan_interface: ${lan_interface}"
+ 		echo "    wan_interface: ${wan_interface}"
+ 		echo "    auto_config_kernel_parameter: true"
+@@ -263,7 +298,7 @@ generate() {
+ 
+ 		echo "dns {"
+ 		echo "    ipversion_prefer: 4"
+-		[ "$response_ttl" -gt 0 ] && echo "    response_ttl: ${response_ttl}"
++		[ "$FORM_PACKAGE" != honk ] && [ "$response_ttl" -gt 0 ] && echo "    response_ttl: ${response_ttl}"
+ 		echo "    upstream {"
+ 		echo "        cndns: '${cn_up}'"
+ 		echo "        fallbackdns: '${fb_up}'"
+@@ -284,6 +319,9 @@ generate() {
+ 		echo "}"
+ 		echo ""
+ 
++		if [ "$FORM_PACKAGE" = honk ]; then
++			/usr/share/luci-app-daede/honk-config.sh listener || return 1
++		fi
+ 		echo "routing {"
+ 		echo "    pname(NetworkManager) -> direct"
+ 		# multicast / broadcast direct (geoip:private doesn't cover these)
+@@ -308,6 +346,11 @@ generate() {
+ 	} > "$TMP_GEN"
+ 	chmod 600 "$TMP_GEN"  # dae rejects world/group-accessible config files
+ 
++	if [ "$FORM_PACKAGE" = honk ]; then
++		/usr/share/luci-app-daede/honk-config.sh install "$TMP_GEN"
++		return $?
++	fi
++
+ 	# overwrite live config only if validation passes
+ 	local out
+ 	out="$(DAE_LOCATION_ASSET="/usr/share/v2ray" "$DAE_BIN" validate -c "$TMP_GEN" 2>&1)"
+@@ -416,7 +459,7 @@ do_delete_sub() {
+ # ===================== entry =====================
+ 
+ case "$1" in
+-	generate)   generate ;;
++	generate|generate-honk) generate ;;
+ 	import)     do_import ;;
+ 	write-sub)  do_write_sub "$2" ;;
+ 	delete-sub) do_delete_sub "$2" ;;
+diff --git a/luci-app-daede/root/usr/share/luci-app-daede/honk-config.sh b/luci-app-daede/root/usr/share/luci-app-daede/honk-config.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..f301ed3b43e2ddad8bc820101d00df0a108c853b
+--- /dev/null
++++ b/luci-app-daede/root/usr/share/luci-app-daede/honk-config.sh
+@@ -0,0 +1,100 @@
++#!/bin/sh
++# honk integration for the LuCI group form. Requires the upstream honk package
++# with native-api support. Its init script and binaries remain package-owned.
++set -eu
++umask 077
++
++CONFIG=/etc/honk/daede.dae
++SECRET=/etc/honk/daede.secret
++API=http://127.0.0.1:9528/api/v1
++WORK=""
++fail() { echo "$*" >&2; exit 1; }
++cleanup() { [ -z "$WORK" ] || rm -rf "$WORK"; }
++trap cleanup EXIT
++trap 'exit 1' HUP INT TERM
++
++request() {
++	method="$1"; endpoint="$2"; body="${3:-}"
++	if [ -n "$body" ]; then
++		curl -fsS --noproxy '*' --connect-timeout 2 --max-time 10 \
++			-H "@$WORK/headers" -H 'Content-Type: application/json' \
++			-X "$method" --data-binary "@$body" "$API$endpoint" > "$WORK/response"
++	else
++		curl -fsS --noproxy '*' --connect-timeout 2 --max-time 10 \
++			-H "@$WORK/headers" -X "$method" "$API$endpoint" > "$WORK/response"
++	fi
++}
++field() {
++	ucode -e 'let fs=require("fs"); let v=json(fs.readfile(ARGV[0])); print(v[ARGV[1]] ?? "");' -- "$WORK/response" "$1"
++}
++
++case "${1:-}" in
++defaults)
++	exec /usr/share/luci-app-daede/config-defaults.sh
++	;;
++listener)
++	mkdir -p /etc/honk
++	if [ ! -s "$SECRET" ]; then
++		cat /proc/sys/kernel/random/uuid /proc/sys/kernel/random/uuid | tr -d '\n-' > "$SECRET"
++	fi
++	chmod 600 "$SECRET"
++	token="$(cat "$SECRET")"
++	case "$token" in ''|*[!0-9a-f]*) fail 'invalid honk management token' ;; esac
++	cat <<EOF
++experimental {
++    native_api {
++        enabled: true
++        listen: '127.0.0.1:9528'
++        secret: '$token'
++        config_write: true
++    }
++}
++EOF
++	;;
++install)
++	candidate="${2:-}"
++	case "$candidate" in /tmp/honk-gen.*) ;; *) fail 'invalid generated honk config path' ;; esac
++	[ -f "$candidate" ] || fail 'generated honk config is missing'
++	[ -x /etc/init.d/honk ] && [ -x /usr/bin/honk-core ] || fail 'install the upstream honk OpenWrt package first'
++	[ "$(uci -q get honk.config.store || echo file)" != db ] || fail 'honk is using database storage; this LuCI form requires file storage'
++	running=0
++	if pidof honk-core >/dev/null 2>&1; then
++		running=1
++		[ "$(uci -q get honk.config.config_file || :)" = "$CONFIG" ] || fail 'stop honk before saving this form for the first time'
++	fi
++	WORK="$(mktemp -d /tmp/daede-honk.XXXXXX)"
++	printf 'Authorization: Bearer %s\n' "$(cat "$SECRET")" > "$WORK/headers"
++	if [ "$running" = 1 ]; then
++		ucode -e 'let fs=require("fs"); print({mode:"full",sources:[{path:ARGV[1],content:fs.readfile(ARGV[0])}]});' \
++			-- "$candidate" "$CONFIG" > "$WORK/validate.json"
++		request POST /config/validate "$WORK/validate.json" || fail 'cannot validate the honk configuration'
++		[ "$(field valid)" = true ] || fail 'honk rejected the generated configuration; the active file was kept'
++	fi
++	# A stopped engine admits the file at startup; a running engine validates it
++	# before replacement and acknowledges the actual reload operation below.
++	cp "$candidate" "$CONFIG.tmp"
++	chmod 600 "$CONFIG.tmp"
++	mv "$CONFIG.tmp" "$CONFIG"
++	uci set "honk.config.config_file=$CONFIG"
++	uci commit honk
++	if [ "$running" = 1 ]; then
++		printf '{}' > "$WORK/reload.json"
++		request POST /operations/reload "$WORK/reload.json" || fail 'honk reload request failed; generated config is saved on disk'
++		operation="$(field operation_id)"
++		case "$operation" in ''|*[!A-Za-z0-9_-]*) fail 'invalid honk reload operation' ;; esac
++		attempt=0
++		while [ "$attempt" -lt 20 ]; do
++			request GET "/operations/$operation" || fail 'cannot read honk reload result'
++			case "$(field status)" in
++				succeeded) echo ok; exit 0 ;;
++				failed) fail 'honk reload failed; generated config is saved on disk, check the honk log' ;;
++			esac
++			attempt=$((attempt + 1))
++			sleep 1
++		done
++		fail 'honk reload is still pending; check the honk log before retrying'
++	fi
++	echo ok
++	;;
++*) fail "usage: $0 {defaults|listener|install /tmp/honk-gen.*}" ;;
++esac
+diff --git a/luci-app-daede/root/usr/share/luci-app-daede/honk-web-setup.uc b/luci-app-daede/root/usr/share/luci-app-daede/honk-web-setup.uc
+new file mode 100644
+index 0000000000000000000000000000000000000000..08376b2f34eb9e332849f4e144a8f4fee9569496
+--- /dev/null
++++ b/luci-app-daede/root/usr/share/luci-app-daede/honk-web-setup.uc
+@@ -0,0 +1,37 @@
++// Configure only the native listener. Never regenerate nodes/groups/routing.
++import * as fs from 'fs';
++let path = ARGV[0];
++let text = fs.readfile(path);
++if (text == null) die('honk configuration is missing\n');
++let blocks = [], stack = [], word = '', start = 0, quote = '', comment = false;
++for (let i = 0; i < length(text); i++) {
++    let c = substr(text, i, 1);
++    if (comment) { if (c == '\n') comment = false; continue; }
++    if (quote) { if (c == '\\') i++; else if (c == quote) quote = ''; continue; }
++    if (c == '#') { comment = true; continue; }
++    if (c == "'" || c == '"') { quote = c; continue; }
++    if (match(c, /[A-Za-z0-9_]/)) {
++        if (i == 0 || !match(substr(text, i-1, 1), /[A-Za-z0-9_]/)) { word = ''; start = i; }
++        word += c;
++    } else if (c == '{') {
++        let b = {name: word, start, open: i}; push(stack, b); push(blocks, b); word = '';
++    } else if (c == '}') { let b = pop(stack); if (!b) die('Unbalanced configuration\n'); b.end = i+1; word = ''; }
++}
++if (length(stack)) die('Unbalanced configuration\n');
++let native = filter(blocks, b => b.name == 'native_api');
++if (length(native) > 1) die('Multiple native_api blocks: configure one listener manually\n');
++let listener = "native_api {\n        enabled: true\n        listen: '127.0.0.1:9528'\n        password_auth: true\n        config_write: true\n    }";
++let next;
++if (length(native)) next = substr(text,0,native[0].start) + listener + substr(text,native[0].end);
++else {
++    let experimental = filter(blocks, b => b.name == 'experimental');
++    if (length(experimental)) {
++        let at = experimental[0].end - 1;
++        next = substr(text,0,at) + '\n    ' + listener + '\n' + substr(text,at);
++    } else next = text + '\nexperimental {\n    ' + listener + '\n}\n';
++}
++if (next != text) {
++    if (!fs.stat(path + '.pre-webui')) { fs.writefile(path + '.pre-webui', text); fs.chmod(path + '.pre-webui', 0600); }
++    fs.writefile(path + '.webui-tmp', next); fs.chmod(path + '.webui-tmp', 0600);
++    if (!fs.rename(path + '.webui-tmp', path)) die('Cannot publish honk listener configuration\n');
++}
+diff --git a/luci-app-daede/root/usr/share/luci-app-daede/honk-web.sh b/luci-app-daede/root/usr/share/luci-app-daede/honk-web.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..f42313dd533c36e9c1a4a3e9223ffbf3e1e998bb
+--- /dev/null
++++ b/luci-app-daede/root/usr/share/luci-app-daede/honk-web.sh
+@@ -0,0 +1,31 @@
++#!/bin/sh
++# Account credentials are read from private UCI, never passed on command lines.
++set -eu
++umask 077
++tmp=$(mktemp -d /tmp/daede-honk-account.XXXXXX)
++trap 'rm -rf "$tmp"' EXIT
++api=http://127.0.0.1:9528
++fail() { echo "$*" >&2; exit 1; }
++case "${1:-}" in
++prepare)
++    [ "$(uci -q get honk.config.store || echo file)" = file ] || fail 'Database storage is active; export it before switching to file management.'
++    config=$(uci -q get honk.config.config_file || echo /etc/honk/config.dae)
++    [ -f "$config" ] || fail 'Install honk first; its configuration file is missing.'
++    pidof dae daed >/dev/null 2>&1 && fail 'Stop dae/daed before starting honk.'
++    # A previous version stored the static secret in this managed main file.
++    # Replace only its native listener; retain every proxy/routing section.
++    ucode /usr/share/luci-app-daede/honk-web-setup.uc "$config"
++    /etc/init.d/honk restart
++    tries=0
++    until curl -fsS --noproxy '*' --max-time 2 "$api/api" > "$tmp/discovery"; do
++        tries=$((tries+1)); [ "$tries" -lt 30 ] || fail 'honk did not start; check its log.'
++        sleep 1
++    done
++    ucode -e 'let uci=require("uci").cursor(); uci.load("honk"); let u=uci.get("honk","config","dashboard_username"), p=uci.get("honk","config","dashboard_password"); if (!u || !p) die("Set the honk dashboard username and password first\n"); print({username:u,password:p});' > "$tmp/login"
++    action=$(ucode -e 'let fs=require("fs"); print(json(fs.readfile(ARGV[0])).auth.setup_required ? "setup" : "login");' "$tmp/discovery")
++    code=$(curl -sS --noproxy '*' --max-time 30 -o "$tmp/session" -w '%{http_code}' -H 'Content-Type: application/json' --data-binary "@$tmp/login" "$api/api/v1/auth/$action")
++    [ "$code" = 200 ] || [ "$code" = 201 ] || fail 'honk account initialization/login failed. For an existing account use its current password; saving credentials does not reset it.'
++    echo 'honk WebUI is ready. Use the saved account to sign in.'
++    ;;
++*) fail 'usage: honk-web.sh prepare' ;;
++esac
+diff --git a/luci-app-daede/root/usr/share/luci-app-daede/pkg-info.sh b/luci-app-daede/root/usr/share/luci-app-daede/pkg-info.sh
+index ea6b26189744c5edf5f83317b2f3222935481124..070142b9eb4be918d47dfb5ab701b056c092258d 100755
+--- a/luci-app-daede/root/usr/share/luci-app-daede/pkg-info.sh
++++ b/luci-app-daede/root/usr/share/luci-app-daede/pkg-info.sh
+@@ -6,7 +6,7 @@
+ 
+ PKG="$1"
+ case "$PKG" in
+-	dae|daed|luci-app-daede) ;;
++	dae|daed|honk|luci-app-daede) ;;
+ 	*) echo "" ; exit 64 ;;
+ esac
+ 
+@@ -54,6 +54,7 @@ esac
+ 
+ if [ "$state" = "absent" ]; then
+ 	case "$PKG" in
++		honk) [ -x /usr/bin/honk-core ] && state="manual" ;;
+ 		dae|daed) [ -x "/usr/bin/$PKG" ] && state="manual" ;;
+ 	esac
+ fi
+diff --git a/luci-app-daede/root/usr/share/luci-app-daede/update-geo.sh b/luci-app-daede/root/usr/share/luci-app-daede/update-geo.sh
+index 783f11610047e515f7f6fbdafde918def095f60c..2ce96999bb412c40db8fe97a1f9ef33bf0f27519 100755
+--- a/luci-app-daede/root/usr/share/luci-app-daede/update-geo.sh
++++ b/luci-app-daede/root/usr/share/luci-app-daede/update-geo.sh
+@@ -39,12 +39,12 @@ schedule_backend_reload() {
+ 	(
+ 		sleep 25
+ 		ab="$(uci -q get daede.config.active_backend 2>/dev/null || echo daed)"
+-		if [ "$ab" = dae ]; then
+-			bin=dae; act=hot_reload
+-		else
+-			bin=daed; act=reload
+-		fi
+-		if /bin/pidof "$bin" >/dev/null 2>&1; then
++		case "$ab" in
++			dae) bin=dae; process=dae; act=hot_reload ;;
++			honk) bin=honk; process=honk-core; act=reload ;;
++			*) bin=daed; process=daed; act=reload ;;
++		esac
++		if /bin/pidof "$process" >/dev/null 2>&1; then
+ 			if "/etc/init.d/$bin" "$act" >/dev/null 2>&1; then
+ 				echo "$(date '+%F %T') reloaded $bin"
+ 			else
+diff --git a/luci-app-daede/root/usr/share/luci-app-daede/update-pkg.sh b/luci-app-daede/root/usr/share/luci-app-daede/update-pkg.sh
+index 1c0e47a4d00a803cba6340418f4696063de3a028..c3e58af4fe1fceff2f3760360c12a6e8ea355ce7 100755
+--- a/luci-app-daede/root/usr/share/luci-app-daede/update-pkg.sh
++++ b/luci-app-daede/root/usr/share/luci-app-daede/update-pkg.sh
+@@ -6,7 +6,7 @@
+ 
+ PKG="$1"
+ case "$PKG" in
+-	dae|daed|luci-app-daede) ;;
++	dae|daed|honk|luci-app-daede) ;;
+ 	*)
+ 		echo "usage: $0 <dae|daed|luci-app-daede>" >&2
+ 		exit 64
+diff --git a/luci-app-daede/root/usr/share/rpcd/acl.d/luci-app-daede.json b/luci-app-daede/root/usr/share/rpcd/acl.d/luci-app-daede.json
+index 2caddd74d6dd4e24aa73b09302027bd886654d6a..073c540789c0455140ae78ce59677aeeecd1cc57 100644
+--- a/luci-app-daede/root/usr/share/rpcd/acl.d/luci-app-daede.json
++++ b/luci-app-daede/root/usr/share/rpcd/acl.d/luci-app-daede.json
+@@ -1,98 +1,321 @@
+ {
+ 	"luci-app-daede": {
+-		"description": "Grant access to dae/daed configuration",
++		"description": "Grant access to dae/daed/honk configuration",
+ 		"read": {
+ 			"file": {
+-				"/etc/init.d/dae": [ "read" ],
+-				"/etc/init.d/daed": [ "read" ],
+-				"/etc/config/daede": [ "read" ],
+-				"/etc/dae/config.dae": [ "read" ],
+-				"/etc/dae/example.dae": [ "read" ],
+-				"/var/log/dae/dae.log": [ "read" ],
+-				"/var/log/daed/daed.log": [ "read" ],
+-				"/usr/share/v2ray/geoip.dat": [ "read" ],
+-				"/usr/share/v2ray/geosite.dat": [ "read" ],
+-				"/sys/kernel/btf/vmlinux": [ "read" ],
+-				"/usr/lib/debug/boot/vmlinux": [ "read" ],
+-				"/run/netns/daens": [ "read" ],
+-				"/tmp/luci-app-daede.geoip.log": [ "read" ],
+-				"/tmp/luci-app-daede.geosite.log": [ "read" ],
+-				"/tmp/luci-app-daede.pkg-dae.log": [ "read" ],
+-				"/tmp/luci-app-daede.pkg-daed.log": [ "read" ],
+-				"/tmp/luci-app-daede.pkg-luci-app-daede.log": [ "read" ],
+-				"/tmp/luci-app-daede.idx.status": [ "read" ],
+-				"/tmp/luci-app-daede.backup.log": [ "read" ],
+-				"/bin/pidof dae": [ "exec" ],
+-				"/bin/pidof daed": [ "exec" ],
+-				"/usr/bin/env DAE_LOCATION_ASSET=/usr/share/v2ray /usr/bin/dae validate -c /tmp/dae-validate.dae": [ "exec" ],
+-				"/usr/bin/dae --version": [ "exec" ],
+-				"/bin/rm -f /tmp/dae-validate.dae": [ "exec" ],
+-				"/usr/share/luci-app-daede/pkg-info.sh dae": [ "exec" ],
+-				"/usr/share/luci-app-daede/pkg-info.sh daed": [ "exec" ],
+-				"/usr/share/luci-app-daede/pkg-info.sh luci-app-daede": [ "exec" ],
+-				"/usr/share/luci-app-daede/refresh-index.sh": [ "exec" ],
+-				"/usr/share/luci-app-daede/proxy-check.sh": [ "exec" ]
++				"/etc/init.d/dae": [
++					"read"
++				],
++				"/etc/init.d/daed": [
++					"read"
++				],
++				"/etc/config/daede": [
++					"read"
++				],
++				"/etc/dae/config.dae": [
++					"read"
++				],
++				"/etc/dae/example.dae": [
++					"read"
++				],
++				"/var/log/dae/dae.log": [
++					"read"
++				],
++				"/var/log/daed/daed.log": [
++					"read"
++				],
++				"/usr/share/v2ray/geoip.dat": [
++					"read"
++				],
++				"/usr/share/v2ray/geosite.dat": [
++					"read"
++				],
++				"/sys/kernel/btf/vmlinux": [
++					"read"
++				],
++				"/usr/lib/debug/boot/vmlinux": [
++					"read"
++				],
++				"/run/netns/daens": [
++					"read"
++				],
++				"/tmp/luci-app-daede.geoip.log": [
++					"read"
++				],
++				"/tmp/luci-app-daede.geosite.log": [
++					"read"
++				],
++				"/tmp/luci-app-daede.pkg-dae.log": [
++					"read"
++				],
++				"/tmp/luci-app-daede.pkg-daed.log": [
++					"read"
++				],
++				"/tmp/luci-app-daede.pkg-luci-app-daede.log": [
++					"read"
++				],
++				"/tmp/luci-app-daede.idx.status": [
++					"read"
++				],
++				"/tmp/luci-app-daede.backup.log": [
++					"read"
++				],
++				"/bin/pidof dae": [
++					"exec"
++				],
++				"/bin/pidof daed": [
++					"exec"
++				],
++				"/usr/bin/env DAE_LOCATION_ASSET=/usr/share/v2ray /usr/bin/dae validate -c /tmp/dae-validate.dae": [
++					"exec"
++				],
++				"/usr/bin/dae --version": [
++					"exec"
++				],
++				"/bin/rm -f /tmp/dae-validate.dae": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/pkg-info.sh dae": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/pkg-info.sh daed": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/pkg-info.sh luci-app-daede": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/refresh-index.sh": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/proxy-check.sh": [
++					"exec"
++				],
++				"/var/log/honk/honk.log": [
++					"read"
++				],
++				"/etc/init.d/honk": [
++					"read"
++				],
++				"/bin/pidof honk-core": [
++					"exec"
++				],
++				"/tmp/luci-app-daede.pkg-honk.log": [
++					"read"
++				],
++				"/usr/share/luci-app-daede/pkg-info.sh honk": [
++					"exec"
++				]
+ 			},
+ 			"ubus": {
+-				"service": [ "list" ]
++				"service": [
++					"list"
++				]
+ 			},
+-			"uci": [ "dae", "daed", "daede" ]
++			"uci": [
++				"dae",
++				"daed",
++				"daede",
++				"honk"
++			]
+ 		},
+ 		"write": {
+ 			"file": {
+-				"/etc/dae/config.dae": [ "write" ],
+-				"/tmp/dae-validate.dae": [ "write" ],
+-				"/tmp/daede-import.b64": [ "write" ],
+-				"/tmp/daede-sub.txt": [ "write" ],
+-				"/etc/daed/.daede-sub-stage-*": [ "write" ],
+-				"/etc/daed/daede-sub-*": [ "write" ],
+-				"/usr/share/luci-app-daede/config-backup.sh import": [ "exec" ],
+-				"/usr/share/luci-app-daede/snapshot-file.sh publish *": [ "exec" ],
+-				"/usr/share/luci-app-daede/snapshot-file.sh replace * *": [ "exec" ],
+-				"/usr/share/luci-app-daede/snapshot-file.sh discard *": [ "exec" ],
+-				"/usr/share/luci-app-daede/gen-dae-config.sh write-sub *": [ "exec" ],
+-				"/usr/share/luci-app-daede/gen-dae-config.sh delete-sub *": [ "exec" ],
+-				"/etc/config/daede": [ "write" ],
+-				"/var/log/dae/dae.log": [ "write" ],
+-				"/var/log/daed/daed.log": [ "write" ],
+-				"/etc/init.d/dae start": [ "exec" ],
+-				"/etc/init.d/dae stop": [ "exec" ],
+-				"/etc/init.d/dae restart": [ "exec" ],
+-				"/etc/init.d/dae enable": [ "exec" ],
+-				"/etc/init.d/dae disable": [ "exec" ],
+-				"/etc/init.d/dae hot_reload": [ "exec" ],
+-				"/etc/init.d/daed start": [ "exec" ],
+-				"/etc/init.d/daed stop": [ "exec" ],
+-				"/etc/init.d/daed restart": [ "exec" ],
+-				"/etc/init.d/daed enable": [ "exec" ],
+-				"/etc/init.d/daed disable": [ "exec" ],
+-				"/sbin/uci set dae.config.enabled=*": [ "exec" ],
+-				"/sbin/uci set daed.config.enabled=*": [ "exec" ],
+-				"/sbin/uci set daede.config=daede": [ "exec" ],
+-				"/sbin/uci set daede.config.active_backend=*": [ "exec" ],
+-				"/sbin/uci commit dae": [ "exec" ],
+-				"/sbin/uci commit daed": [ "exec" ],
+-				"/sbin/uci commit daede": [ "exec" ],
+-				"/sbin/ip netns del daens": [ "exec" ],
+-				"/usr/share/luci-app-daede/update-geo.sh geoip": [ "exec" ],
+-				"/usr/share/luci-app-daede/update-geo.sh geosite": [ "exec" ],
+-				"/usr/share/luci-app-daede/geo-cron.sh enable": [ "exec" ],
+-				"/usr/share/luci-app-daede/geo-cron.sh disable": [ "exec" ],
+-				"/usr/share/luci-app-daede/update-pkg.sh dae": [ "exec" ],
+-				"/usr/share/luci-app-daede/update-pkg.sh daed": [ "exec" ],
+-				"/usr/share/luci-app-daede/update-pkg.sh luci-app-daede": [ "exec" ],
+-				"/usr/share/luci-app-daede/fetch-clash-yaml.sh *": [ "exec" ],
+-				"/usr/share/luci-app-daede/gen-dae-config.sh generate": [ "exec" ],
+-				"/usr/share/luci-app-daede/gen-dae-config.sh import": [ "exec" ],
+-				"/usr/share/luci-app-daede/daed-sub-update.sh": [ "exec" ],
+-				"/usr/share/luci-app-daede/daed-sub-cron.sh enable": [ "exec" ],
+-				"/usr/share/luci-app-daede/daed-sub-cron.sh disable": [ "exec" ],
+-				"/usr/share/luci-app-daede/config-backup.sh export": [ "exec" ],
+-				"/usr/share/luci-app-daede/config-backup.sh reset": [ "exec" ],
+-				"/usr/share/luci-app-daede/config-backup.sh import /tmp/daede-import.*.b64": [ "exec" ],
+-				"/tmp/daede-import.*.b64": [ "write" ]
++				"/etc/dae/config.dae": [
++					"write"
++				],
++				"/tmp/dae-validate.dae": [
++					"write"
++				],
++				"/tmp/daede-import.b64": [
++					"write"
++				],
++				"/tmp/daede-sub.txt": [
++					"write"
++				],
++				"/etc/daed/.daede-sub-stage-*": [
++					"write"
++				],
++				"/etc/daed/daede-sub-*": [
++					"write"
++				],
++				"/usr/share/luci-app-daede/config-backup.sh import": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/snapshot-file.sh publish *": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/snapshot-file.sh replace * *": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/snapshot-file.sh discard *": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/gen-dae-config.sh write-sub *": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/gen-dae-config.sh delete-sub *": [
++					"exec"
++				],
++				"/etc/config/daede": [
++					"write"
++				],
++				"/var/log/dae/dae.log": [
++					"write"
++				],
++				"/var/log/daed/daed.log": [
++					"write"
++				],
++				"/etc/init.d/dae start": [
++					"exec"
++				],
++				"/etc/init.d/dae stop": [
++					"exec"
++				],
++				"/etc/init.d/dae restart": [
++					"exec"
++				],
++				"/etc/init.d/dae enable": [
++					"exec"
++				],
++				"/etc/init.d/dae disable": [
++					"exec"
++				],
++				"/etc/init.d/dae hot_reload": [
++					"exec"
++				],
++				"/etc/init.d/daed start": [
++					"exec"
++				],
++				"/etc/init.d/daed stop": [
++					"exec"
++				],
++				"/etc/init.d/daed restart": [
++					"exec"
++				],
++				"/etc/init.d/daed enable": [
++					"exec"
++				],
++				"/etc/init.d/daed disable": [
++					"exec"
++				],
++				"/sbin/uci set dae.config.enabled=*": [
++					"exec"
++				],
++				"/sbin/uci set daed.config.enabled=*": [
++					"exec"
++				],
++				"/sbin/uci set daede.config=daede": [
++					"exec"
++				],
++				"/sbin/uci set daede.config.active_backend=*": [
++					"exec"
++				],
++				"/sbin/uci commit dae": [
++					"exec"
++				],
++				"/sbin/uci commit daed": [
++					"exec"
++				],
++				"/sbin/uci commit daede": [
++					"exec"
++				],
++				"/sbin/ip netns del daens": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/update-geo.sh geoip": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/update-geo.sh geosite": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/geo-cron.sh enable": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/geo-cron.sh disable": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/update-pkg.sh dae": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/update-pkg.sh daed": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/update-pkg.sh luci-app-daede": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/fetch-clash-yaml.sh *": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/gen-dae-config.sh generate": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/gen-dae-config.sh import": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/daed-sub-update.sh": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/daed-sub-cron.sh enable": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/daed-sub-cron.sh disable": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/config-backup.sh export": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/config-backup.sh reset": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/config-backup.sh import /tmp/daede-import.*.b64": [
++					"exec"
++				],
++				"/tmp/daede-import.*.b64": [
++					"write"
++				],
++				"/var/log/honk/honk.log": [
++					"write"
++				],
++				"/etc/init.d/honk start": [
++					"exec"
++				],
++				"/etc/init.d/honk stop": [
++					"exec"
++				],
++				"/etc/init.d/honk restart": [
++					"exec"
++				],
++				"/etc/init.d/honk enable": [
++					"exec"
++				],
++				"/etc/init.d/honk disable": [
++					"exec"
++				],
++				"/sbin/uci set honk.config.enabled=*": [
++					"exec"
++				],
++				"/sbin/uci commit honk": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/honk-config.sh defaults": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/gen-dae-config.sh generate-honk": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/update-pkg.sh honk": [
++					"exec"
++				],
++				"/usr/share/luci-app-daede/honk-web.sh prepare": [
++					"exec"
++				]
+ 			},
+-			"uci": [ "dae", "daed", "daede" ]
++			"uci": [
++				"dae",
++				"daed",
++				"daede",
++				"honk"
++			]
+ 		}
+ 	}
+ }
+diff --git a/luci-app-daede/root/www/cgi-bin/daede-honk b/luci-app-daede/root/www/cgi-bin/daede-honk
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e8ef545975aa355fd6e0e40b1870003f5b91397
+--- /dev/null
++++ b/luci-app-daede/root/www/cgi-bin/daede-honk
+@@ -0,0 +1,38 @@
++#!/usr/bin/ucode
++// Same-origin relay. honk checks the caller's own session on every request.
++// Account setup is intentionally local-only through the LuCI privileged helper.
++import * as fs from 'fs';
++function reply(status, body) {
++    print(`Status: ${status}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n${body}`);
++    exit(0);
++}
++let query = getenv('QUERY_STRING') || '';
++let raw = match(query, /^path=([^&]+)$/);
++let path = raw ? replace(raw[1], /%([0-9a-fA-F]{2})/g, m => chr(int(substr(m, 1), 16))) : '';
++if (!match(path, /^\/api\/v1\/(version|capabilities|runtime|nodes|providers|groups|config|operations|probes|auth\/login|auth\/logout)([\/?][A-Za-z0-9_.~%?=&\/-]*)?$/))
++    reply('400 Bad Request', '{"message":"Unsupported native API path"}');
++let method = getenv('REQUEST_METHOD');
++if (index(['GET','POST','PUT','PATCH','DELETE'], method) < 0) reply('405 Method Not Allowed', '{}');
++let auth = getenv('HTTP_AUTHORIZATION') || '';
++let etag = getenv('HTTP_IF_MATCH') || '';
++if (match(auth + etag, /[\r\n]/)) reply('400 Bad Request', '{}');
++let length = int(getenv('CONTENT_LENGTH') || '0');
++if (length < 0 || length > 4194304) reply('413 Payload Too Large', '{}');
++let temp = fs.mkdtemp('/tmp/daede-honk-relay.XXXXXX');
++if (!temp) reply('500 Internal Server Error', '{}');
++let headers = fs.open(temp + '/headers', 'w', 0600);
++headers.write('Content-Type: application/json\n');
++if (auth) headers.write('Authorization: ' + auth + '\n');
++if (etag) headers.write('If-Match: ' + etag + '\n');
++headers.close();
++let body = fs.open(temp + '/body', 'w', 0600);
++body.write(length ? fs.stdin.read(length) : ''); body.close();
++// Every shell-interpolated value is fixed, enum-checked, or restricted above.
++let cmd = sprintf("curl -sS --noproxy '*' --connect-timeout 3 --max-time 120 -X %s -H @%s/headers %s -o %s/response -w '%%{http_code}' 'http://127.0.0.1:9528%s'", method, temp, length ? '--data-binary @' + temp + '/body' : '', temp, path);
++let pipe = fs.popen(cmd, 'r');
++let status = pipe ? trim(pipe.read('all')) : '502';
++let rc = pipe ? pipe.close() : 1;
++let result = fs.readfile(temp + '/response') || '{}';
++for (let file in ['headers','body','response']) fs.unlink(temp + '/' + file);
++fs.rmdir(temp);
++reply(rc == 0 && match(status, /^[1-5][0-9][0-9]$/) ? status : '502 Bad Gateway', result);
+diff --git a/scripts/honk-score-selftest.py b/scripts/honk-score-selftest.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c6ce6e815c60ffd252c22ddbf29c499ef846c952
+--- /dev/null
++++ b/scripts/honk-score-selftest.py
+@@ -0,0 +1,256 @@
++#!/usr/bin/env python3
++"""Exercise the LuCI policy choices and honk save/reload path in an isolated tree.
++
++Run on Linux with node, curl and ucode installed. No router files are modified.
++"""
++import http.server
++import json
++import os
++from pathlib import Path
++import subprocess
++import tempfile
++import threading
++import time
++import urllib.request
++
++REPO = Path(__file__).resolve().parents[1]
++SHARE = REPO / 'luci-app-daede/root/usr/share/luci-app-daede'
++
++
++def run(*args, env=None, ok=True):
++    result = subprocess.run(args, text=True, capture_output=True, env=env)
++    if ok and result.returncode:
++        raise AssertionError(result.stderr or result.stdout)
++    return result
++
++
++def check_form():
++    source = REPO / 'luci-app-daede/htdocs/luci-static/resources/view/daede/dae.js'
++    run('node', '-e', r'''
++const fs = require('fs'), assert = require('assert');
++const source = fs.readFileSync(process.argv[1], 'utf8');
++for (const name of ['dae', 'honk']) {
++  const sections = [];
++  function Map(config) {
++    assert.equal(config, name);
++    this.section = function(kind, type) {
++      const section = {type, fields: [], option(kind, key) {
++        const field = {key, values: [], value(v) {this.values.push(v)}};
++        this.fields.push(field); return field;
++      }};
++      sections.push(section); return section;
++    };
++    // Stop at rendering: the policy/validation contract is already constructed.
++    this.render = () => ({then() {}});
++  }
++  const module = new Function('baseclass','form','fs','uci','ui','backend','_','E', source)(
++    {extend: v => v}, {Map}, {}, {sections: () => []}, {}, {}, s => s, () => ({}));
++  module.renderDaeForms({backend:{name,uci:name},netDevs:[]});
++  const policy = sections.find(s => s.type === 'group').fields.find(f => f.key === 'policy');
++  assert.equal(policy.values.includes('score'), name === 'honk');
++  assert.equal(policy.values.includes('random'), name === 'dae');
++  assert.equal(policy.values.includes('min_last_delay'), name === 'honk');
++  const url = sections.find(s => s.type === 'subscription').fields.find(f => f.key === 'url');
++  assert.equal(url.validate('', 'https://example.com/sub'), true);
++  assert.equal(url.validate('', 'file://subscriptions/test.sub') === true, name === 'dae');
++}
++console.log('PASS: backend-specific policy choices and subscription validation');
++''', str(source))
++    print('PASS: LuCI policy choices, independent UCI packages, subscription validation')
++
++
++class API(http.server.BaseHTTPRequestHandler):
++    valid = True
++    reload_status = 'succeeded'
++    calls = []
++
++    def log_message(self, *args):
++        pass
++
++    def do_POST(self):
++        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
++        self.calls.append((self.path, body))
++        if self.path.endswith('/config/validate'):
++            assert body['mode'] == 'full'
++            assert 'policy: score' in body['sources'][0]['content']
++            result = {'valid': self.valid}
++        else:
++            assert self.path.endswith('/operations/reload')
++            result = {'operation_id': 'reload-1'}
++        self.reply(result)
++
++    def do_GET(self):
++        self.calls.append((self.path, None))
++        self.reply({'status': self.reload_status})
++
++    def reply(self, value):
++        self.send_response(200)
++        self.send_header('Content-Type', 'application/json')
++        self.end_headers()
++        self.wfile.write(json.dumps(value).encode())
++
++
++def check_generator():
++    with tempfile.TemporaryDirectory(prefix='honk-score-test-') as directory:
++        tree = Path(directory)
++        for name in ('etc/honk', 'tmp', 'bin', 'share', 'var/log/honk'):
++            (tree / name).mkdir(parents=True)
++        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), API)
++        threading.Thread(target=server.serve_forever, daemon=True).start()
++        try:
++            state = {
++                'honk': {
++                    'config': {'.type': 'honk', 'store': 'file', 'config_file': str(tree / 'etc/honk/daede.dae'), 'wan_interface': '', 'lan_interface': ''},
++                    'test_node': {'.type': 'node', 'tag': 'test_node', 'link': 'socks5://127.0.0.1:1080#test_node'},
++                    'proxy': {'.type': 'group', 'name': 'proxy', 'policy': 'score'},
++                    'routing': {'.type': 'routing', 'cn_direct': '0', 'private_direct': '0'},
++                }
++            }
++            database = tree / 'uci.json'
++            database.write_text(json.dumps(state))
++            uci = tree / 'bin/uci'
++            uci.write_text('''#!/usr/bin/env python3
++import json, os, sys
++p=os.environ['MOCK_UCI_DATA']; d=json.load(open(p)); a=[x for x in sys.argv[1:] if x!='-q']; cmd=a.pop(0)
++if cmd=='commit': sys.exit(0)
++if cmd=='sections':
++ print(' '.join(k for k,v in d[a[0]].items() if v.get('.type')==a[1])); sys.exit(0)
++key,*value=a[0].split('=',1); parts=key.split('.')
++try:
++ if cmd=='get':
++  v=d
++  for k in parts: v=v[k]
++  print(' '.join(v) if isinstance(v,list) else v); sys.exit(0)
++ if cmd=='set':
++  d.setdefault(parts[0],{}).setdefault(parts[1],{})[parts[2]]=value[0]
++  json.dump(d,open(p,'w')); sys.exit(0)
++except KeyError: sys.exit(1)
++sys.exit(1)
++''')
++            uci.chmod(0o755)
++            functions = tree / 'functions.sh'
++            functions.write_text('''config_load() { CFG="$1"; }
++config_get() { local val; val="$(uci -q get "$CFG.$2.$3")" || val="${4:-}"; export "$1=$val"; }
++config_get_bool() { config_get "$@"; }
++config_foreach() { local sec; for sec in $(uci sections "$CFG" "$2"); do "$1" "$sec"; done; }
++config_list_foreach() { local val; for val in $(uci -q get "$CFG.$1.$2"); do "$3" "$val"; done; }
++''')
++            for name, content in (
++                ('pidof', '#!/bin/sh\n[ "$MOCK_RUNNING" = 1 ]\n'),
++                ('honk-core', '#!/bin/sh\nexit 0\n'),
++                ('honk-init', '#!/bin/sh\nexit 0\n'),
++            ):
++                path = tree / 'bin' / name
++                path.write_text(content)
++                path.chmod(0o755)
++
++            def isolated(text):
++                return (text.replace('/tmp/', str(tree / 'tmp') + '/')
++                        .replace('/lib/functions.sh', str(functions))
++                        .replace('/usr/share/luci-app-daede', str(tree / 'share'))
++                        .replace('/etc/init.d/honk', str(tree / 'bin/honk-init'))
++                        .replace('/usr/bin/honk-core', str(tree / 'bin/honk-core'))
++                        .replace('/etc/honk', str(tree / 'etc/honk'))
++                        .replace('/var/log/honk', str(tree / 'var/log/honk'))
++                        .replace('127.0.0.1:9528', '127.0.0.1:' + str(server.server_port)))
++
++            for name in ('gen-dae-config.sh', 'honk-config.sh'):
++                path = tree / 'share' / name
++                path.write_text(isolated((SHARE / name).read_text()))
++                path.chmod(0o755)
++            env = dict(os.environ, PATH=str(tree / 'bin') + ':' + os.environ['PATH'], MOCK_UCI_DATA=str(database), MOCK_RUNNING='0')
++            generator = str(tree / 'share/gen-dae-config.sh')
++            config = tree / 'etc/honk/daede.dae'
++            run('sh', generator, 'generate-honk', env=env)
++            text = config.read_text()
++            assert 'policy: score' in text and "filter: name(regex: '.*')" in text
++            assert '127.0.0.1:' + str(server.server_port) in text
++            assert config.stat().st_mode & 0o777 == 0o600
++            assert not API.calls, 'stopped saves must not claim runtime validation'
++            print('PASS: score config generation, all-node filter, private config, stopped save')
++
++            env['MOCK_RUNNING'] = '1'
++            API.calls.clear()
++            run('sh', generator, 'generate-honk', env=env)
++            assert [p for p, _ in API.calls] == ['/api/v1/config/validate', '/api/v1/operations/reload', '/api/v1/operations/reload-1']
++            print('PASS: full validation before save, reload acknowledgement')
++
++            config.write_text('# keep active file\n')
++            API.valid = False
++            API.calls.clear()
++            result = run('sh', generator, 'generate-honk', env=env, ok=False)
++            assert result.returncode and config.read_text() == '# keep active file\n'
++            assert len(API.calls) == 1
++            print('PASS: rejected candidate preserves active file and does not reload')
++
++            API.valid = True
++            API.reload_status = 'failed'
++            result = run('sh', generator, 'generate-honk', env=env, ok=False)
++            assert result.returncode and 'reload failed' in result.stderr
++            print('PASS: failed runtime reload cannot report success')
++
++            state['honk']['proxy']['policy'] = 'random'
++            database.write_text(json.dumps(state))
++            assert run('sh', generator, 'generate-honk', env=env, ok=False).returncode
++            state['honk']['proxy']['policy'] = 'score'
++            state['honk']['airport'] = {'.type': 'subscription', 'url': 'file://subscriptions/airport.sub'}
++            database.write_text(json.dumps(state))
++            assert run('sh', generator, 'generate-honk', env=env, ok=False).returncode
++            print('PASS: unsupported policies and file subscriptions are rejected')
++
++            # Optional integration against a real upstream release. --mock-ebpf
++            # avoids attaching hooks or changing the host's routing interfaces.
++            core = os.environ.get('HONK_CORE_BINARY')
++            if core:
++                server.shutdown()
++                server.server_close()
++                state['honk'].pop('airport')
++                database.write_text(json.dumps(state))
++                env['MOCK_RUNNING'] = '0'
++                run('sh', generator, 'generate-honk', env=env)
++                geo = tree / 'geo'
++                geo.mkdir()
++                # Minimal protobuf GeoSiteList, CN -> domain example.cn.
++                domain = b'\x08\x02\x12\x0aexample.cn'
++                entry = b'\x0a\x02CN\x12' + bytes([len(domain)]) + domain
++                (geo / 'geosite.dat').write_bytes(b'\x0a' + bytes([len(entry)]) + entry)
++                (geo / 'geoip.dat').write_bytes(b'')
++                core_env = dict(os.environ, DAE_LOCATION_ASSET=str(geo))
++                log = (tree / 'core.log').open('w+')
++                process = subprocess.Popen([core, '--mock-ebpf', '-c', str(config)], cwd=tree, env=core_env, stdout=log, stderr=log)
++                try:
++                    groups = None
++                    token = (tree / 'etc/honk/daede.secret').read_text().strip()
++                    request = urllib.request.Request('http://127.0.0.1:' + str(server.server_port) + '/api/v1/groups', headers={'Authorization': 'Bearer ' + token})
++                    for _ in range(100):
++                        if process.poll() is not None:
++                            log.seek(0)
++                            raise AssertionError(log.read())
++                        try:
++                            with urllib.request.urlopen(request, timeout=1) as response:
++                                groups = json.load(response)
++                            break
++                        except OSError:
++                            time.sleep(.1)
++                    assert groups is not None, 'real core native API did not start'
++                    rows = groups if isinstance(groups, list) else groups['groups']
++                    assert any(g['name'] == 'proxy' and g['policy']['kind'] == 'score' for g in rows), groups
++                    env['MOCK_RUNNING'] = '1'
++                    run('sh', generator, 'generate-honk', env=env)
++                    print('PASS: real honk release accepts generated Score group and acknowledges reload (mock eBPF)')
++                finally:
++                    process.terminate()
++                    try:
++                        process.wait(timeout=10)
++                    except subprocess.TimeoutExpired:
++                        process.kill()
++                        process.wait()
++                    log.close()
++        finally:
++            server.shutdown()
++            server.server_close()
++
++
++if __name__ == '__main__':
++    check_form()
++    check_generator()
