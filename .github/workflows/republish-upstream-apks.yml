@@ -1,4 +1,4 @@
-name: Republish upstream APKs and honk cores
+name: 按平台发布 honk 内核
 
 # One release per architecture, same shape as VIKINGYFY/OpenWRT-CI:
 # <line>-VIKINGYFY-owrt-<yy.mm.dd-HH.MM.SS>
@@ -30,7 +30,7 @@ env:
 
 jobs:
   cores:
-    name: ${{ matrix.line }} clash, bare and release
+    name: ${{ matrix.arch }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -39,16 +39,16 @@ jobs:
         include:
           - arch: aarch64_cortex-a53
             target: mediatek/filogic
-            line: A53
+            line: AARCH64_CORTEX-A53
           - arch: aarch64_cortex-a72
             target: bcm27xx/bcm2711
-            line: A72
+            line: AARCH64_CORTEX-A72
           - arch: aarch64_cortex-a76
             target: bcm27xx/bcm2712
-            line: A76
+            line: AARCH64_CORTEX-A76
           - arch: aarch64_generic
             target: armsr/armv8
-            line: ARM64
+            line: AARCH64_GENERIC
           - arch: x86_64
             target: x86/64
             line: X86_64
