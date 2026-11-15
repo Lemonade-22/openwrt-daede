@@ -1,9 +1,9 @@
 name: Republish upstream APKs and honk cores
 
-# Pulls the packages upstream already publishes, and builds the two honk
-# cores that have no OpenWrt apk: clash-api without the embedded UI, and a
-# bare core with neither UI. The native-ui core is the honk apk on
-# openwrt.daeuniverse.org, so it is downloaded rather than built again.
+# One release per architecture, same shape as VIKINGYFY/OpenWRT-CI:
+# <line>-VIKINGYFY-owrt-<yy.mm.dd-HH.MM.SS>
+# native-ui honk and vmlinux-btf-builtin are downloaded. clash and bare are built.
+# doona is the pinned panel apk. zashboard is whatever GitHub marks latest.
 on:
   workflow_dispatch:
     inputs:
@@ -29,46 +29,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  fetch:
-    name: Pull published APKs
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Download honk, the BTF placeholder and the doona panel
-        env:
-          OPENWRT_VERSION: ${{ inputs.openwrt_version }}
-          DOONA_TAG: ${{ inputs.doona_tag }}
-        run: |
-          set -euo pipefail
-          series=${OPENWRT_VERSION%.*}
-          mkdir -p dist/pulled/noarch
-          for arch in aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76 aarch64_generic x86_64; do
-            base="https://openwrt.daeuniverse.org/files/${series}/packages/${arch}"
-            page=$(curl -fsSL --retry 3 "$base/")
-            honk=$(printf '%s\n' "$page" | grep -oE 'honk-[^" ]+\.apk' | head -n 1)
-            btf=$(printf '%s\n' "$page" | grep -oE 'vmlinux-btf-builtin-[^" ]+\.apk' | head -n 1)
-            [[ -n "$honk" && -n "$btf" ]] || { echo "::error::Missing honk or vmlinux-btf-builtin for $arch"; exit 1; }
-            mkdir -p "dist/pulled/$arch"
-            curl -fL --retry 3 -o "dist/pulled/$arch/${arch}-honk-native-ui-$honk" "$base/$honk"
-            curl -fL --retry 3 -o "dist/pulled/$arch/${arch}-$btf" "$base/$btf"
-          done
-          tmp=$(mktemp -d)
-          gh release download "$DOONA_TAG" --repo Zakkaus/doona --dir "$tmp" --pattern 'doona-*.apk'
-          mapfile -t panel < <(find "$tmp" -type f -name 'doona-*_*-r*.apk' ! -name 'doona-fonts-*' ! -name 'doona-precompressed-*')
-          [[ ${#panel[@]} == 1 ]] || { echo "::error::Expected one doona panel apk, found ${#panel[@]}"; printf '%s\n' "${panel[@]:-}"; exit 1; }
-          cp "${panel[0]}" dist/pulled/noarch/
-      - uses: actions/upload-artifact@v7
-        with:
-          name: pulled-apks
-          path: dist/pulled/
-          if-no-files-found: error
-          retention-days: 14
-
   cores:
-    name: Build ${{ matrix.arch }} clash and bare
+    name: ${{ matrix.line }} clash, bare and release
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -77,14 +39,19 @@ jobs:
         include:
           - arch: aarch64_cortex-a53
             target: mediatek/filogic
+            line: A53
           - arch: aarch64_cortex-a72
             target: bcm27xx/bcm2711
+            line: A72
           - arch: aarch64_cortex-a76
             target: bcm27xx/bcm2712
+            line: A76
           - arch: aarch64_generic
             target: armsr/armv8
+            line: ARM64
           - arch: x86_64
             target: x86/64
+            line: X86_64
     env:
       OPENWRT_VERSION: ${{ inputs.openwrt_version }}
       OPENWRT_ARCH: ${{ matrix.arch }}
@@ -153,56 +120,49 @@ jobs:
           for variant in clash bare; do
             HONK_VARIANT="$variant" bash custom/honk-score/build-honk-variant.sh
           done
-      - uses: actions/upload-artifact@v7
-        with:
-          name: cores-${{ matrix.arch }}
-          path: dist/cores/
-          if-no-files-found: error
-          retention-days: 14
-
-  release:
-    name: Publish one release
-    needs: [fetch, cores]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: pulled-apks
-          path: dist/pulled
-          merge-multiple: true
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: cores-*
-          path: dist/cores
-          merge-multiple: true
-      - name: Checksum and name the release
+      - name: Collect this architecture and the latest zashboard
+        env:
+          DOONA_TAG: ${{ inputs.doona_tag }}
+          LINE: ${{ matrix.line }}
         run: |
           set -euo pipefail
-          find dist -type f -name '*.apk' | sort | xargs sha256sum > dist/SHA256SUMS
-          test -s dist/SHA256SUMS
+          series=${OPENWRT_VERSION%.*}
+          mkdir -p upload
+          find dist/cores -type f -name '*.apk' -exec cp -t upload {} +
+          base="https://openwrt.daeuniverse.org/files/${series}/packages/${OPENWRT_ARCH}"
+          page=$(curl -fsSL --retry 3 "$base/")
+          honk=$(printf '%s\n' "$page" | grep -oE 'honk-[^" ]+\.apk' | head -n 1)
+          btf=$(printf '%s\n' "$page" | grep -oE 'vmlinux-btf-builtin-[^" ]+\.apk' | head -n 1)
+          [[ -n "$honk" && -n "$btf" ]] || { echo "::error::Missing honk or vmlinux-btf-builtin"; exit 1; }
+          curl -fL --retry 3 -o "upload/${OPENWRT_ARCH}-honk-native-ui-$honk" "$base/$honk"
+          curl -fL --retry 3 -o "upload/${OPENWRT_ARCH}-$btf" "$base/$btf"
+          tmp=$(mktemp -d)
+          gh release download "$DOONA_TAG" --repo Zakkaus/doona --dir "$tmp" --pattern 'doona-*.apk'
+          mapfile -t panel < <(find "$tmp" -type f -name 'doona-*_*-r*.apk' ! -name 'doona-fonts-*' ! -name 'doona-precompressed-*')
+          [[ ${#panel[@]} == 1 ]] || { echo "::error::Expected one doona panel apk, found ${#panel[@]}"; exit 1; }
+          cp "${panel[0]}" upload/
+          ztag=$(gh release view --repo Zephyruso/zashboard --json tagName --jq .tagName)
+          gh release download --repo Zephyruso/zashboard --pattern dist.zip --dir "$tmp" --clobber
+          cp "$tmp/dist.zip" "upload/zashboard-${ztag}-dist.zip"
+          echo "ZASHBOARD_TAG=$ztag" >> "$GITHUB_ENV"
+          (cd upload && sha256sum ./* > SHA256SUMS)
           stamp=$(TZ=UTC-8 date +%y.%m.%d-%H.%M.%S)
-          echo "REL_TAG=UPSTREAM-HONK-owrt-$stamp" >> "$GITHUB_ENV"
-      - name: Publish the release
+          echo "REL_TAG=${LINE}-HONK-VIKINGYFY-owrt-$stamp" >> "$GITHUB_ENV"
+          ls -l upload
+      - name: Publish this architecture
         uses: softprops/action-gh-release@master
         with:
           tag_name: ${{ env.REL_TAG }}
           name: ${{ env.REL_TAG }}
-          files: |
-            dist/SHA256SUMS
-            dist/pulled/**/*.apk
-            dist/cores/**/*.apk
+          files: upload/*
           body: |
-            Upstream OpenWrt packages plus the two honk cores that upstream does not publish as apk.
+            ${{ matrix.arch }} only. One release per architecture, same tag shape as VIKINGYFY/OpenWRT-CI.
 
-            Pulled, per architecture (aarch64_cortex-a53, a72, a76, aarch64_generic, x86_64):
-            - honk-native-ui: the honk apk from openwrt.daeuniverse.org. It is the full core, with the Clash API, the native API and the embedded doona UI.
-            - vmlinux-btf-builtin: the empty placeholder.
+            - honk-native-ui: downloaded. Clash API, native API, embedded doona.
+            - honk-clash and honk-bare: built here. The internal package name is still honk, so do not install them on top of each other.
+            - vmlinux-btf-builtin: downloaded placeholder.
+            - doona panel: ${{ inputs.doona_tag }}.
+            - zashboard: latest release (${{ env.ZASHBOARD_TAG }}), dist.zip. It is a web bundle, not an architecture-specific apk.
 
-            Pulled once: the doona panel apk from Zakkaus/doona ${{ inputs.doona_tag }}.
-
-            Built here, per architecture, from the pinned honk source:
-            - honk-clash: Clash API, no embedded UI.
-            - honk-bare: eBPF core only, no Clash API and no UI.
-
-            The built packages still use the internal name honk, so do not install clash and bare on top of each other. SDK input: ${{ inputs.openwrt_version }}.
+            SDK: ${{ inputs.openwrt_version }}, target ${{ matrix.target }}.
             Source: ${{ github.sha }}.
