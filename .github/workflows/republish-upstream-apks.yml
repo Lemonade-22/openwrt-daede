@@ -141,6 +141,7 @@ jobs:
         env:
           DOONA_TAG: ${{ inputs.doona_tag }}
           LINE: ${{ matrix.line }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           series=${OPENWRT_VERSION%.*}
