@@ -18,7 +18,7 @@ text=path.read_text()
 # the numeric part, so the old '.honk1' release suffix cannot be published.
 # Bump the version with the patch suffix instead; a dotted digit version is
 # required so that a re-run cannot stack a second suffix.
-text,count=re.subn(r'^PKG_VERSION:=(\d+(?:\.\d+)*)$',r'PKG_VERSION:=\1_p1',text,count=1,flags=re.M)
+text,count=re.subn(r'^PKG_VERSION:=(\d+(?:\.\d+)*)$',r'PKG_VERSION:=\1_p2',text,count=1,flags=re.M)
 if count != 1:
     raise SystemExit('cannot locate upstream PKG_VERSION')
 path.write_text(text)

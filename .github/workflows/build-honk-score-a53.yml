@@ -104,12 +104,17 @@ jobs:
         run: |
           set -euo pipefail
           bash custom/honk-score/apply.sh "$GITHUB_WORKSPACE"
-          # Register honk for LuCI's optional backend dependency. This job builds
+          # Keep the honk recipe available to the SDK. This job builds
           # only dae, daed and LuCI; the source-based honk build has its own job.
           cp -a _honk-feed/honk honk
           mv _honk-feed "$RUNNER_TEMP/honk-feed-metadata"
           git -C .github/actions/honk-score-sdk apply "$GITHUB_WORKSPACE/.github/patches/gh-action-sdk-pahole.patch"
           git -C .github/actions/honk-score-sdk apply "$GITHUB_WORKSPACE/custom/honk-score/sdk-no-btf-build.patch"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Build the original WebUI with honk Native API support
+        run: bash custom/honk-score/build-webui.sh "$GITHUB_WORKSPACE"
       - name: Free runner disk for Go builds
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
       - name: Build three APKs with the upstream SDK action
