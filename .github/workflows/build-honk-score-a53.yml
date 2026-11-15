@@ -272,9 +272,12 @@ jobs:
           retention-days: 14
 
   bundle:
-    name: Verify and bundle all four APKs
+    name: Verify, bundle and release the APKs
     needs: [prepare, dae-daed-luci, honk]
     runs-on: ubuntu-latest
+    permissions:
+      # A release needs to write tags and upload assets; the workflow default is read-only.
+      contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -296,8 +299,31 @@ jobs:
             echo 'Architecture: aarch64_cortex-a53; LuCI is noarch.'
             echo 'SDK input: ${{ needs.prepare.outputs.version }} (dae/daed/LuCI use the corresponding ImmortalWrt SDK series).'
             echo 'Source: `${{ needs.prepare.outputs.sha }}`'
-            echo 'Download the combined APK artifact below. No release was published.'
+            echo 'A release is published with the same files.'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Name the release
+        # Same tag shape as the OpenWRT-CI_Self builds: <name>-<info>-<branch>-<UTC+8 stamp>.
+        run: |
+          set -euo pipefail
+          stamp=$(TZ=UTC-8 date +%y.%m.%d-%H.%M.%S)
+          echo "REL_TAG=HONK-SCORE-A53-VIKINGYFY-owrt-$stamp" >> "$GITHUB_ENV"
+      - name: Publish the release
+        uses: softprops/action-gh-release@master
+        with:
+          tag_name: ${{ env.REL_TAG }}
+          name: ${{ env.REL_TAG }}
+          files: dist/*
+          body: |
+            A53 APKs built from the honk Score overlay.
+
+            - dae, daed: unchanged upstream backends.
+            - honk: beta.6 rebuilt with the Clash API, the native API and the embedded doona UI at /ui.
+            - luci-app-daede: the LuCI page with the honk backend and the Score policy.
+            - vmlinux-btf-builtin: an empty placeholder that satisfies the vmlinux-btf dependency on a kernel carrying its own BTF. Install it before honk on ImmortalWrt or a snapshot kernel.
+
+            Architecture: aarch64_cortex-a53; the LuCI package and the placeholder are noarch.
+            SDK input: ${{ needs.prepare.outputs.version }}.
+            Source: ${{ needs.prepare.outputs.sha }}.
       - uses: actions/upload-artifact@v7
         with:
           name: apks-openwrt-${{ needs.prepare.outputs.version }}-aarch64_cortex-a53-honk-score
