@@ -1,0 +1,60 @@
+name: Auto-Clean-Self
+
+# Keeps the newest releases of each build line. A line is the release title
+# before the build timestamp. Each line keeps at least one release.
+on:
+  schedule:
+    - cron: '21 21 * * *'
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: '每种标题保留的最新 Release 数量（至少 1 个）'
+        type: number
+        default: 2
+        required: true
+      dry_run:
+        description: '仅列出将删除的 Release，不实际删除'
+        type: boolean
+        default: true
+        required: true
+      delete_tags:
+        description: '同时删除被清理 Release 的 git tag'
+        type: boolean
+        default: true
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-clean-self
+  cancel-in-progress: false
+
+jobs:
+  clean-releases:
+    name: 按标题保留最新 Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout cleanup script
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Delete older releases per title
+        uses: actions/github-script@v8
+        env:
+          CLEAN_KEEP: ${{ inputs.keep }}
+          CLEAN_DRY_RUN: ${{ inputs.dry_run }}
+          CLEAN_DELETE_TAGS: ${{ inputs.delete_tags }}
+        with:
+          retries: 3
+          script: |
+            const clean = require('./Scripts/Clean-Releases.cjs');
+            await clean({
+              github,
+              context,
+              core,
+              keep: process.env.CLEAN_KEEP,
+              dryRun: process.env.CLEAN_DRY_RUN || 'false',
+              deleteTags: process.env.CLEAN_DELETE_TAGS || 'true'
+            });

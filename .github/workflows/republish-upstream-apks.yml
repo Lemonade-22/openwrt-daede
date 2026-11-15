@@ -1,0 +1,208 @@
+name: Republish upstream APKs and honk cores
+
+# Pulls the packages upstream already publishes, and builds the two honk
+# cores that have no OpenWrt apk: clash-api without the embedded UI, and a
+# bare core with neither UI. The native-ui core is the honk apk on
+# openwrt.daeuniverse.org, so it is downloaded rather than built again.
+on:
+  workflow_dispatch:
+    inputs:
+      openwrt_version:
+        description: 'Stable SDK release (example: 25.12.6)'
+        type: string
+        required: true
+        default: '25.12.6'
+      doona_tag:
+        description: 'doona release tag that supplies the panel apk'
+        type: string
+        required: true
+        default: 'v0.1.0-rc.6'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: republish-upstream-apks
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  fetch:
+    name: Pull published APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Download honk, the BTF placeholder and the doona panel
+        env:
+          OPENWRT_VERSION: ${{ inputs.openwrt_version }}
+          DOONA_TAG: ${{ inputs.doona_tag }}
+        run: |
+          set -euo pipefail
+          series=${OPENWRT_VERSION%.*}
+          mkdir -p dist/pulled/noarch
+          for arch in aarch64_cortex-a53 aarch64_cortex-a72 aarch64_cortex-a76 aarch64_generic x86_64; do
+            base="https://openwrt.daeuniverse.org/files/${series}/packages/${arch}"
+            page=$(curl -fsSL --retry 3 "$base/")
+            honk=$(printf '%s\n' "$page" | grep -oE 'honk-[^" ]+\.apk' | head -n 1)
+            btf=$(printf '%s\n' "$page" | grep -oE 'vmlinux-btf-builtin-[^" ]+\.apk' | head -n 1)
+            [[ -n "$honk" && -n "$btf" ]] || { echo "::error::Missing honk or vmlinux-btf-builtin for $arch"; exit 1; }
+            mkdir -p "dist/pulled/$arch"
+            curl -fL --retry 3 -o "dist/pulled/$arch/${arch}-honk-native-ui-$honk" "$base/$honk"
+            curl -fL --retry 3 -o "dist/pulled/$arch/${arch}-$btf" "$base/$btf"
+          done
+          tmp=$(mktemp -d)
+          gh release download "$DOONA_TAG" --repo Zakkaus/doona --dir "$tmp" --pattern 'doona-*.apk'
+          mapfile -t panel < <(find "$tmp" -type f -name 'doona-*_*-r*.apk' ! -name 'doona-fonts-*' ! -name 'doona-precompressed-*')
+          [[ ${#panel[@]} == 1 ]] || { echo "::error::Expected one doona panel apk, found ${#panel[@]}"; printf '%s\n' "${panel[@]:-}"; exit 1; }
+          cp "${panel[0]}" dist/pulled/noarch/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pulled-apks
+          path: dist/pulled/
+          if-no-files-found: error
+          retention-days: 14
+
+  cores:
+    name: Build ${{ matrix.arch }} clash and bare
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64_cortex-a53
+            target: mediatek/filogic
+          - arch: aarch64_cortex-a72
+            target: bcm27xx/bcm2711
+          - arch: aarch64_cortex-a76
+            target: bcm27xx/bcm2712
+          - arch: aarch64_generic
+            target: armsr/armv8
+          - arch: x86_64
+            target: x86/64
+    env:
+      OPENWRT_VERSION: ${{ inputs.openwrt_version }}
+      OPENWRT_ARCH: ${{ matrix.arch }}
+      SDK_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Read pins
+        run: |
+          set -euo pipefail
+          source custom/honk-score/pins.env
+          echo "HONK_FEED_COMMIT=$HONK_FEED_COMMIT" >> "$GITHUB_ENV"
+          echo "HONK_COMMIT=$HONK_COMMIT" >> "$GITHUB_ENV"
+          echo "HONK_FEED_DIR=$GITHUB_WORKSPACE/_honk-feed" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+        with:
+          repository: daeuniverse/openwrt-packages
+          ref: ${{ env.HONK_FEED_COMMIT }}
+          path: _honk-feed
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: daeuniverse/honk
+          ref: ${{ env.HONK_COMMIT }}
+          path: _honk-feed/honk/src
+          persist-credentials: false
+      - name: Install build tools
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm libbpf-dev \
+            pkg-config cmake libclang-dev zstd build-essential bzip2 perl python3 \
+            rsync unzip git ca-certificates file gawk gettext libncurses-dev
+      - name: Install Rust and bpf-linker
+        run: |
+          set -euo pipefail
+          core="$GITHUB_WORKSPACE/_honk-feed/honk/src"
+          stable=$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["toolchain"]["channel"])' "$core/rust-toolchain.toml")
+          nightly=$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["toolchain"]["channel"])' "$core/crates/honk-ebpf/rust-toolchain.toml")
+          rustup toolchain install "$stable" --profile minimal --target aarch64-unknown-linux-musl --target x86_64-unknown-linux-musl
+          rustup toolchain install "$nightly" --profile minimal --component rust-src --component llvm-tools
+          source "$core/.github/ci/pins.env"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/bpf-linker.tar.zst" \
+            "https://github.com/aya-rs/bpf-linker/releases/download/v$BPF_LINKER_VERSION/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+          echo "$BPF_LINKER_SHA256  $RUNNER_TEMP/bpf-linker.tar.zst" | sha256sum -c -
+          tar --zstd -xf "$RUNNER_TEMP/bpf-linker.tar.zst" -C "$HOME/.cargo/bin"
+          bpf-linker --version
+      - name: Download the SDK
+        run: bash custom/honk-score/prepare-sdk-target.sh
+      - name: Prepare the honk package
+        run: |
+          set -euo pipefail
+          source custom/honk-score/pins.env
+          export HONK_FEED_COMMIT HONK_COMMIT HONK_GIT_TAG HONK_VERSION
+          cd "$SDK_DIR"
+          printf 'src-link honk %s\n' "$HONK_FEED_DIR" > feeds.conf
+          ./scripts/feeds update honk
+          ./scripts/feeds install -p honk honk
+          printf '\nCONFIG_PACKAGE_honk=m\n' >> .config
+          make defconfig
+          grep -q "^CONFIG_TARGET_ARCH_PACKAGES=\"$OPENWRT_ARCH\"$" .config
+      - name: Build clash and bare cores
+        run: |
+          set -euo pipefail
+          for variant in clash bare; do
+            HONK_VARIANT="$variant" bash custom/honk-score/build-honk-variant.sh
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cores-${{ matrix.arch }}
+          path: dist/cores/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish one release
+    needs: [fetch, cores]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: pulled-apks
+          path: dist/pulled
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cores-*
+          path: dist/cores
+          merge-multiple: true
+      - name: Checksum and name the release
+        run: |
+          set -euo pipefail
+          find dist -type f -name '*.apk' | sort | xargs sha256sum > dist/SHA256SUMS
+          test -s dist/SHA256SUMS
+          stamp=$(TZ=UTC-8 date +%y.%m.%d-%H.%M.%S)
+          echo "REL_TAG=UPSTREAM-HONK-owrt-$stamp" >> "$GITHUB_ENV"
+      - name: Publish the release
+        uses: softprops/action-gh-release@master
+        with:
+          tag_name: ${{ env.REL_TAG }}
+          name: ${{ env.REL_TAG }}
+          files: |
+            dist/SHA256SUMS
+            dist/pulled/**/*.apk
+            dist/cores/**/*.apk
+          body: |
+            Upstream OpenWrt packages plus the two honk cores that upstream does not publish as apk.
+
+            Pulled, per architecture (aarch64_cortex-a53, a72, a76, aarch64_generic, x86_64):
+            - honk-native-ui: the honk apk from openwrt.daeuniverse.org. It is the full core, with the Clash API, the native API and the embedded doona UI.
+            - vmlinux-btf-builtin: the empty placeholder.
+
+            Pulled once: the doona panel apk from Zakkaus/doona ${{ inputs.doona_tag }}.
+
+            Built here, per architecture, from the pinned honk source:
+            - honk-clash: Clash API, no embedded UI.
+            - honk-bare: eBPF core only, no Clash API and no UI.
+
+            The built packages still use the internal name honk, so do not install clash and bare on top of each other. SDK input: ${{ inputs.openwrt_version }}.
+            Source: ${{ github.sha }}.
