@@ -235,27 +235,6 @@ jobs:
         run: |
           set -euo pipefail
           bash custom/honk-score/build-honk.sh 2>&1 | tee "$RUNNER_TEMP/honk-build.log"
-      - name: Build the vmlinux-btf-builtin placeholder APK
-        # honk depends on vmlinux-btf, which only installs on the exact official
-        # kernel blob. An empty package that provides it satisfies that dependency
-        # on a kernel carrying its own BTF, such as ImmortalWrt and the ipq60xx
-        # snapshots. apk mkpkg comes with the SDK and needs no compilation.
-        run: |
-          set -euo pipefail
-          mkdir -p dist/honk "$RUNNER_TEMP/btf-empty"
-          host="$SDK_DIR/staging_dir/host/bin"
-          "${host}/fakeroot" "${host}/apk" mkpkg \
-            --info "name:vmlinux-btf-builtin" \
-            --info "version:1-r1" \
-            --info "arch:noarch" \
-            --info "license:GPL-3.0-or-later" \
-            --info "origin:feeds/daede/vmlinux-btf-builtin" \
-            --info "description:Stands in for vmlinux-btf on a kernel with its own BTF" \
-            --info "provides:vmlinux-btf" \
-            --info "depends:" \
-            --files "$RUNNER_TEMP/btf-empty" \
-            --output "dist/honk/vmlinux-btf-builtin-1-r1.apk"
-          ls -l dist/honk/
       - uses: actions/upload-artifact@v7
         with:
           name: honk-score-a53-honk
