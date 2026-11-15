@@ -1,7 +1,7 @@
 name: 按平台发布 honk 内核
 
-# One release per architecture, same shape as VIKINGYFY/OpenWRT-CI:
-# <line>-VIKINGYFY-owrt-<yy.mm.dd-HH.MM.SS>
+# One release per architecture. The timestamp shape follows VIKINGYFY;
+# the name does not. <line>-HONK-<yy.mm.dd-HH.MM.SS>
 # native-ui honk and vmlinux-btf-builtin are downloaded. clash and bare are built.
 # doona is the pinned panel apk. zashboard is whatever GitHub marks latest.
 on:
@@ -172,7 +172,7 @@ jobs:
           echo "ZASHBOARD_TAG=$ztag" >> "$GITHUB_ENV"
           (cd upload && sha256sum ./* > SHA256SUMS)
           stamp=$(TZ=UTC-8 date +%y.%m.%d-%H.%M.%S)
-          echo "REL_TAG=${LINE}-HONK-VIKINGYFY-owrt-$stamp" >> "$GITHUB_ENV"
+          echo "REL_TAG=${LINE}-HONK-$stamp" >> "$GITHUB_ENV"
           ls -l upload
       - name: Publish this architecture
         uses: softprops/action-gh-release@master
@@ -181,7 +181,7 @@ jobs:
           name: ${{ env.REL_TAG }}
           files: upload/*
           body: |
-            ${{ matrix.arch }} only. One release per architecture, same tag shape as VIKINGYFY/OpenWRT-CI.
+            ${{ matrix.arch }} only. One release per architecture: <platform>-HONK-<yy.mm.dd-HH.MM.SS>.
 
             - honk-native-ui: downloaded. Clash API, native API, embedded doona.
             - honk-clash and honk-bare: built here. The internal package name is still honk, so do not install them on top of each other.
