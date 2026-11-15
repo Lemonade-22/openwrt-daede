@@ -9,7 +9,9 @@ repo=${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}
 feed=${HONK_FEED_DIR:?HONK_FEED_DIR is required}
 arch=${OPENWRT_ARCH:?OPENWRT_ARCH is required}
 cd "${SDK_DIR:?SDK_DIR is required}"
-git -C "$feed" checkout -- honk/build.sh
+orig="$feed/honk/build.sh.orig"
+if [[ ! -f "$orig" ]]; then cp "$feed/honk/build.sh" "$orig"; fi
+cp "$orig" "$feed/honk/build.sh"
 python3 - "$feed/honk/build.sh" "$variant" <<'PY'
 import pathlib, sys
 path, variant = sys.argv[1:]
@@ -39,7 +41,7 @@ file.write_text(file_text.replace(old, new, 1))
 PY
 make package/honk/clean V=s || true
 rm -f "$feed/honk/src/honk-core"
-find bin/packages -type f -name 'honk-*.apk' -delete
+if [[ -d bin/packages ]]; then find bin/packages -type f -name 'honk-*.apk' -delete; fi
 make -j2 package/honk/compile V=s CONFIG_PACKAGE_honk=m CONFIG_PACKAGE_vmlinux-btf=
 mapfile -t packages < <(find bin/packages -type f -name 'honk-*.apk')
 [[ ${#packages[@]} == 1 ]] || { echo "Expected one honk APK for $variant, found ${#packages[@]}" >&2; exit 1; }
