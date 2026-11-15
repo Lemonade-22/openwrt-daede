@@ -12,18 +12,33 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 
 include $(INCLUDE_DIR)/package.mk
 
+define Package/$(PKG_NAME)/config
+	choice
+		prompt "Backend dependency"
+		default PACKAGE_$(PKG_NAME)_daed
+		help
+			Select which backend package luci-app-daede should pull in by default.
+
+	config PACKAGE_$(PKG_NAME)_daed
+		bool "daed backend"
+
+	config PACKAGE_$(PKG_NAME)_dae
+		bool "dae backend"
+
+	endchoice
+endef
+
 define Package/$(PKG_NAME)
 	SECTION:=luci
 	CATEGORY:=LuCI
 	SUBMENU:=3. Applications
 	TITLE:=LuCI app for daede dashboard
-	DEPENDS:=+luci-base
+	DEPENDS:=+luci-base +PACKAGE_$(PKG_NAME)_dae:dae +PACKAGE_$(PKG_NAME)_daed:daed
 	PKGARCH:=all
 endef
 
 define Package/$(PKG_NAME)/description
-	LuCI web interface for dae, daed, or an installed honk full core.
-	It does not pull a backend. daed or honk must already be installed.
+	LuCI web interface for managing dae or daed backends.
 endef
 
 define Build/Prepare

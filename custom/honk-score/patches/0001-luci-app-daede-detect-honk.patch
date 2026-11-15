@@ -1,0 +1,200 @@
+diff --git a/luci-app-daede/Makefile b/luci-app-daede/Makefile
+index 6514a54..ea63249 100644
+--- a/luci-app-daede/Makefile
++++ b/luci-app-daede/Makefile
+@@ -12,33 +12,18 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
+ 
+ include $(INCLUDE_DIR)/package.mk
+ 
+-define Package/$(PKG_NAME)/config
+-	choice
+-		prompt "Backend dependency"
+-		default PACKAGE_$(PKG_NAME)_daed
+-		help
+-			Select which backend package luci-app-daede should pull in by default.
+-
+-	config PACKAGE_$(PKG_NAME)_daed
+-		bool "daed backend"
+-
+-	config PACKAGE_$(PKG_NAME)_dae
+-		bool "dae backend"
+-
+-	endchoice
+-endef
+-
+ define Package/$(PKG_NAME)
+ 	SECTION:=luci
+ 	CATEGORY:=LuCI
+ 	SUBMENU:=3. Applications
+ 	TITLE:=LuCI app for daede dashboard
+-	DEPENDS:=+luci-base +PACKAGE_$(PKG_NAME)_dae:dae +PACKAGE_$(PKG_NAME)_daed:daed
++	DEPENDS:=+luci-base
+ 	PKGARCH:=all
+ endef
+ 
+ define Package/$(PKG_NAME)/description
+-	LuCI web interface for managing dae or daed backends.
++	LuCI web interface for dae, daed, or an installed honk full core.
++	It does not pull a backend. daed or honk must already be installed.
+ endef
+ 
+ define Build/Prepare
+diff --git a/luci-app-daede/htdocs/luci-static/resources/view/daede/backend.js b/luci-app-daede/htdocs/luci-static/resources/view/daede/backend.js
+index f141f74..6f3be2f 100644
+--- a/luci-app-daede/htdocs/luci-static/resources/view/daede/backend.js
++++ b/luci-app-daede/htdocs/luci-static/resources/view/daede/backend.js
+@@ -35,6 +35,18 @@ const BACKENDS = {
+ 		config: '/etc/dae/config.dae',
+ 		hasWebUI: false,
+ 		useNetns: false
++	},
++	honk: {
++		name: 'honk',
++		label: 'honk',
++		uci: 'honk',
++		initd: '/etc/init.d/honk',
++		log: '/var/log/honk/honk.log',
++		pkg: 'honk',
++		hasWebUI: true,
++		useNetns: false,
++		defaultListen: '127.0.0.1:9527',
++		uiPath: '/ui/'
+ 	}
+ };
+ 
+@@ -67,9 +79,10 @@ function serviceStatus(name) {
+ function detectInstalledBackends() {
+ 	return Promise.all([
+ 		exists(BACKENDS.dae.initd),
+-		exists(BACKENDS.daed.initd)
++		exists(BACKENDS.daed.initd),
++		exists(BACKENDS.honk.initd)
+ 	]).then(function(r) {
+-		return { dae: r[0], daed: r[1] };
++		return { dae: r[0], daed: r[1], honk: r[2] };
+ 	});
+ }
+ 
+@@ -79,9 +92,10 @@ function detectRunning() {
+ 	   reliably tells dae from daed without substring false positives. */
+ 	return Promise.all([
+ 		execOk('/bin/pidof', ['dae']),
+-		execOk('/bin/pidof', ['daed'])
++		execOk('/bin/pidof', ['daed']),
++		execOk('/bin/pidof', ['honk'])
+ 	]).then(function(r) {
+-		return { dae: r[0], daed: r[1] };
++		return { dae: r[0], daed: r[1], honk: r[2] };
+ 	});
+ }
+ 
+@@ -116,8 +130,12 @@ function detectBackend() {
+ 		const preferred = r[2];
+ 		let name = preferred;
+ 
+-		if (!name || !installed[name])
+-			name = installed.daed ? 'daed' : (installed.dae ? 'dae' : 'daed');
++		if (!name || !installed[name]) {
++			if (installed.daed) name = 'daed';
++			else if (installed.honk) name = 'honk';
++			else if (installed.dae) name = 'dae';
++			else name = 'daed';
++		}
+ 
+ 		return {
+ 			name: name,
+@@ -125,7 +143,7 @@ function detectBackend() {
+ 			installed: installed,
+ 			running: running,
+ 			preferred: preferred,
+-			bothInstalled: !!(installed.dae && installed.daed)
++			bothInstalled: ['dae', 'daed', 'honk'].filter(function(key) { return installed[key]; }).length > 1
+ 		};
+ 	});
+ }
+diff --git a/luci-app-daede/htdocs/luci-static/resources/view/daede/config.js b/luci-app-daede/htdocs/luci-static/resources/view/daede/config.js
+index bb83ec1..23b97c8 100644
+--- a/luci-app-daede/htdocs/luci-static/resources/view/daede/config.js
++++ b/luci-app-daede/htdocs/luci-static/resources/view/daede/config.js
+@@ -71,7 +71,9 @@ return view.extend({
+ 				});
+ 		};
+ 
+-		const listenAddr = uci.get('daed', 'config', 'listen_addr') || backend.BACKENDS.daed.defaultListen;
++		const listenAddr = ctx.name === 'honk'
++			? backend.BACKENDS.honk.defaultListen
++			: (uci.get('daed', 'config', 'listen_addr') || backend.BACKENDS.daed.defaultListen);
+ 		const children = [
+ 			E('style', {}, styles.CSS),
+ 			widgets.renderStatusCard(ctx, listenAddr),
+@@ -79,11 +81,13 @@ return view.extend({
+ 		].filter(function(node) { return !!node; });
+ 
+ 		if (!ctx.installed[ctx.name]) {
+-			children.push(E('div', { 'class': 'dd-card dd-warning' }, _('Selected backend is not installed. Install dae or daed from the package feed first.')));
++			children.push(E('div', { 'class': 'dd-card dd-warning' }, _('Selected backend is not installed. Install daed or honk first.')));
+ 		} else if (ctx.name === 'dae') {
+ 			children.push(daeView.renderDaeImportBanner());
+ 			children.push(daeView.renderDaeForms(ctx));
+ 			children.push(daeView.renderDaeEditor());
++		} else if (ctx.name === 'honk') {
++			children.push(E('div', { 'class': 'dd-card' }, _('honk full serves doona at port 9527, path /ui/. Open WebUI after the service is running. Sign in on that page; the address itself has no token. The listener must accept this host, not only 127.0.0.1.')));
+ 		} else {
+ 			children.push(daedView.renderDaedSettings());
+ 		}
+diff --git a/luci-app-daede/htdocs/luci-static/resources/view/daede/widgets.js b/luci-app-daede/htdocs/luci-static/resources/view/daede/widgets.js
+index 843fcba..8ff4dfc 100644
+--- a/luci-app-daede/htdocs/luci-static/resources/view/daede/widgets.js
++++ b/luci-app-daede/htdocs/luci-static/resources/view/daede/widgets.js
+@@ -28,8 +28,10 @@ function restartService(be) {
+ }
+ 
+ function rejectIfOtherRunning(be, running) {
+-	const other = be.name === 'dae' ? 'daed' : 'dae';
+-	if (!running || !running[other])
++	const other = ['dae', 'daed', 'honk'].filter(function(name) {
++		return name !== be.name && running && running[name];
++	})[0];
++	if (!other)
+ 		return Promise.resolve();
+ 
+ 	return Promise.reject(new Error(_('%s is already running. Stop %s before starting %s because both backends share the same eBPF/cgroup attachment.').format(other, other, be.name)));
+@@ -72,7 +74,7 @@ function waitForService(be, turnOn, attempts) {
+ }
+ 
+ function renderBackendSwitcher(ctx, onSwitched, initialHint) {
+-	if (!ctx.installed.dae && !ctx.installed.daed)
++	if (!ctx.installed.dae && !ctx.installed.daed && !ctx.installed.honk)
+ 		return null;
+ 
+ 	const wrap = E('div', { 'class': 'dd-card dd-backend-card' }, [
+@@ -93,7 +95,7 @@ function renderBackendSwitcher(ctx, onSwitched, initialHint) {
+ 	const stopIfRunning = function(running) {
+ 		const stops = [];
+ 
+-		['dae', 'daed'].forEach(function(name) {
++		['dae', 'daed', 'honk'].forEach(function(name) {
+ 			if (running && running[name])
+ 				stops.push(execChecked(backend.BACKENDS[name].initd, ['stop'])
+ 					.then(function() { return waitForService(backend.BACKENDS[name], false, 40); }));
+@@ -105,7 +107,7 @@ function renderBackendSwitcher(ctx, onSwitched, initialHint) {
+ 		return Promise.all(stops);
+ 	};
+ 
+-	['daed', 'dae'].forEach(function(name) {
++	['daed', 'honk', 'dae'].forEach(function(name) {
+ 		const active = ctx.name === name;
+ 		const installed = !!ctx.installed[name];
+ 		const btn = E('button', {
+@@ -232,9 +234,10 @@ function renderStatusCard(ctx, listenAddr) {
+ 		const actions = [];
+ 		if (be.hasWebUI && state.running) {
+ 			const port = (listenAddr || be.defaultListen).split(':').slice(-1)[0];
++			const path = be.uiPath || '';
+ 			actions.push(E('a', {
+ 				'class': 'cbi-button cbi-button-action',
+-				'href': 'http://%s:%s'.format(window.location.hostname, port),
++				'href': 'http://%s:%s%s'.format(window.location.hostname, port, path),
+ 				'target': '_blank',
+ 				'rel': 'noreferrer noopener'
+ 			}, _('Open WebUI')));

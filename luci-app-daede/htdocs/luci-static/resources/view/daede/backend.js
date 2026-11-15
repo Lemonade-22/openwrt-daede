@@ -35,18 +35,6 @@ const BACKENDS = {
 		config: '/etc/dae/config.dae',
 		hasWebUI: false,
 		useNetns: false
-	},
-	honk: {
-		name: 'honk',
-		label: 'honk',
-		uci: 'honk',
-		initd: '/etc/init.d/honk',
-		log: '/var/log/honk/honk.log',
-		pkg: 'honk',
-		hasWebUI: true,
-		useNetns: false,
-		defaultListen: '127.0.0.1:9527',
-		uiPath: '/ui/'
 	}
 };
 
@@ -79,10 +67,9 @@ function serviceStatus(name) {
 function detectInstalledBackends() {
 	return Promise.all([
 		exists(BACKENDS.dae.initd),
-		exists(BACKENDS.daed.initd),
-		exists(BACKENDS.honk.initd)
+		exists(BACKENDS.daed.initd)
 	]).then(function(r) {
-		return { dae: r[0], daed: r[1], honk: r[2] };
+		return { dae: r[0], daed: r[1] };
 	});
 }
 
@@ -92,10 +79,9 @@ function detectRunning() {
 	   reliably tells dae from daed without substring false positives. */
 	return Promise.all([
 		execOk('/bin/pidof', ['dae']),
-		execOk('/bin/pidof', ['daed']),
-		execOk('/bin/pidof', ['honk'])
+		execOk('/bin/pidof', ['daed'])
 	]).then(function(r) {
-		return { dae: r[0], daed: r[1], honk: r[2] };
+		return { dae: r[0], daed: r[1] };
 	});
 }
 
@@ -130,12 +116,8 @@ function detectBackend() {
 		const preferred = r[2];
 		let name = preferred;
 
-		if (!name || !installed[name]) {
-			if (installed.daed) name = 'daed';
-			else if (installed.honk) name = 'honk';
-			else if (installed.dae) name = 'dae';
-			else name = 'daed';
-		}
+		if (!name || !installed[name])
+			name = installed.daed ? 'daed' : (installed.dae ? 'dae' : 'daed');
 
 		return {
 			name: name,
@@ -143,7 +125,7 @@ function detectBackend() {
 			installed: installed,
 			running: running,
 			preferred: preferred,
-			bothInstalled: ['dae', 'daed', 'honk'].filter(function(key) { return installed[key]; }).length > 1
+			bothInstalled: !!(installed.dae && installed.daed)
 		};
 	});
 }

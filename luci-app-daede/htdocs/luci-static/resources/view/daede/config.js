@@ -71,9 +71,7 @@ return view.extend({
 				});
 		};
 
-		const listenAddr = ctx.name === 'honk'
-			? backend.BACKENDS.honk.defaultListen
-			: (uci.get('daed', 'config', 'listen_addr') || backend.BACKENDS.daed.defaultListen);
+		const listenAddr = uci.get('daed', 'config', 'listen_addr') || backend.BACKENDS.daed.defaultListen;
 		const children = [
 			E('style', {}, styles.CSS),
 			widgets.renderStatusCard(ctx, listenAddr),
@@ -81,13 +79,11 @@ return view.extend({
 		].filter(function(node) { return !!node; });
 
 		if (!ctx.installed[ctx.name]) {
-			children.push(E('div', { 'class': 'dd-card dd-warning' }, _('Selected backend is not installed. Install daed or honk first.')));
+			children.push(E('div', { 'class': 'dd-card dd-warning' }, _('Selected backend is not installed. Install dae or daed from the package feed first.')));
 		} else if (ctx.name === 'dae') {
 			children.push(daeView.renderDaeImportBanner());
 			children.push(daeView.renderDaeForms(ctx));
 			children.push(daeView.renderDaeEditor());
-		} else if (ctx.name === 'honk') {
-			children.push(E('div', { 'class': 'dd-card' }, _('honk full serves doona at port 9527, path /ui/. Open WebUI after the service is running. Sign in on that page; the address itself has no token. The listener must accept this host, not only 127.0.0.1.')));
 		} else {
 			children.push(daedView.renderDaedSettings());
 		}
