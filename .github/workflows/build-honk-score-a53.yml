@@ -107,6 +107,10 @@ jobs:
           # Keep the honk recipe available to the SDK. This job builds
           # only dae, daed and LuCI; the source-based honk build has its own job.
           cp -a _honk-feed/honk honk
+          # honk depends on vmlinux-btf, which only installs on the exact official
+          # kernel blob. The empty placeholder satisfies it on a kernel with its own
+          # BTF (ImmortalWrt and the ipq60xx snapshots); ship it beside the APKs.
+          cp -a _honk-feed/vmlinux-btf-builtin vmlinux-btf-builtin
           mv _honk-feed "$RUNNER_TEMP/honk-feed-metadata"
           git -C .github/actions/honk-score-sdk apply "$GITHUB_WORKSPACE/.github/patches/gh-action-sdk-pahole.patch"
           git -C .github/actions/honk-score-sdk apply "$GITHUB_WORKSPACE/custom/honk-score/sdk-no-btf-build.patch"
@@ -123,7 +127,7 @@ jobs:
           CONTAINER: immortalwrt/sdk
           ARCH: aarch64_cortex-a53-openwrt-${{ needs.prepare.outputs.series }}
           FEEDNAME: daede
-          PACKAGES: dae daed luci-app-daede
+          PACKAGES: dae daed luci-app-daede vmlinux-btf-builtin
           EXTRA_FEEDS: src-git|wall|https://github.com/kenzok8/wall
           NO_REFRESH_CHECK: true
           NO_SHFMT_CHECK: true
@@ -160,6 +164,14 @@ jobs:
             fi
             cp "${files[0]}" dist/daede/
           done
+          # vmlinux-btf-builtin is PKGARCH:=all, so the SDK may place it outside
+          # the arch-specific directory; accept either location.
+          mapfile -t btf < <(find bin/packages -maxdepth 2 -type f -name "vmlinux-btf-builtin-*.apk")
+          if [[ ${#btf[@]} != 1 ]]; then
+            echo "::error::Expected one vmlinux-btf-builtin APK, found ${#btf[@]}"
+            exit 1
+          fi
+          cp "${btf[0]}" dist/daede/
           {
             echo "fork_sha=$GITHUB_SHA"
             echo "sdk_container=immortalwrt/sdk:aarch64_cortex-a53-openwrt-$SDK_SERIES"
@@ -264,14 +276,14 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          for package in dae daed honk luci-app-daede; do
+          for package in dae daed honk luci-app-daede vmlinux-btf-builtin; do
             mapfile -t files < <(find . -maxdepth 1 -type f -name "$package-*.apk")
             [[ ${#files[@]} == 1 ]] || { echo "::error::Missing or duplicate $package APK"; exit 1; }
           done
           sha256sum ./*.apk > SHA256SUMS
           {
             echo '## A53 APKs ready'
-            echo 'Packages: dae, daed, honk, luci-app-daede (Score overlay).'
+            echo 'Packages: dae, daed, honk, luci-app-daede (Score overlay) and the vmlinux-btf-builtin placeholder.'
             echo 'Architecture: aarch64_cortex-a53; LuCI is noarch.'
             echo 'SDK input: ${{ needs.prepare.outputs.version }} (dae/daed/LuCI use the corresponding ImmortalWrt SDK series).'
             echo 'Source: `${{ needs.prepare.outputs.sha }}`'
