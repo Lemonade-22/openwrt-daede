@@ -107,6 +107,8 @@ jobs:
           set -euo pipefail
           source custom/honk-score/pins.env
           export HONK_FEED_COMMIT HONK_COMMIT HONK_GIT_TAG HONK_VERSION
+          # pins.env is the A53 score build. It must not replace this job's arch.
+          OPENWRT_ARCH="${{ matrix.arch }}"
           cd "$SDK_DIR"
           # The feed also contains LuCI packages. Indexing them fails on an SDK
           # that has not fetched luci.mk. The honk recipe does not need them.
