@@ -28,8 +28,10 @@ function restartService(be) {
 }
 
 function rejectIfOtherRunning(be, running) {
-	const other = be.name === 'dae' ? 'daed' : 'dae';
-	if (!running || !running[other])
+	const other = ['dae', 'daed', 'honk'].filter(function(name) {
+		return name !== be.name && running && running[name];
+	})[0];
+	if (!other)
 		return Promise.resolve();
 
 	return Promise.reject(new Error(_('%s is already running. Stop %s before starting %s because both backends share the same eBPF/cgroup attachment.').format(other, other, be.name)));
@@ -72,7 +74,7 @@ function waitForService(be, turnOn, attempts) {
 }
 
 function renderBackendSwitcher(ctx, onSwitched, initialHint) {
-	if (!ctx.installed.dae && !ctx.installed.daed)
+	if (!ctx.installed.dae && !ctx.installed.daed && !ctx.installed.honk)
 		return null;
 
 	const wrap = E('div', { 'class': 'dd-card dd-backend-card' }, [
@@ -93,7 +95,7 @@ function renderBackendSwitcher(ctx, onSwitched, initialHint) {
 	const stopIfRunning = function(running) {
 		const stops = [];
 
-		['dae', 'daed'].forEach(function(name) {
+		['dae', 'daed', 'honk'].forEach(function(name) {
 			if (running && running[name])
 				stops.push(execChecked(backend.BACKENDS[name].initd, ['stop'])
 					.then(function() { return waitForService(backend.BACKENDS[name], false, 40); }));
@@ -105,7 +107,7 @@ function renderBackendSwitcher(ctx, onSwitched, initialHint) {
 		return Promise.all(stops);
 	};
 
-	['daed', 'dae'].forEach(function(name) {
+	['daed', 'honk', 'dae'].forEach(function(name) {
 		const active = ctx.name === name;
 		const installed = !!ctx.installed[name];
 		const btn = E('button', {
@@ -232,9 +234,10 @@ function renderStatusCard(ctx, listenAddr) {
 		const actions = [];
 		if (be.hasWebUI && state.running) {
 			const port = (listenAddr || be.defaultListen).split(':').slice(-1)[0];
+			const path = be.uiPath || '';
 			actions.push(E('a', {
 				'class': 'cbi-button cbi-button-action',
-				'href': 'http://%s:%s'.format(window.location.hostname, port),
+				'href': 'http://%s:%s%s'.format(window.location.hostname, port, path),
 				'target': '_blank',
 				'rel': 'noreferrer noopener'
 			}, _('Open WebUI')));
